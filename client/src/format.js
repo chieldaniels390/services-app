@@ -1,7 +1,22 @@
-export function money(cents, currency = 'USD') {
-  if (cents == null) return '–';
-  return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(cents / 100);
+let moneyFormat = { currency: 'ZAR', locale: 'en-ZA' };
+
+/** Called once the server config arrives so all prices use the marketplace's currency and locale. */
+export function setMoneyFormat({ currency, locale }) {
+  moneyFormat = { currency, locale };
 }
+
+/** R1 250 for whole amounts, R1 250,50 otherwise. */
+export function money(cents) {
+  if (cents == null) return '–';
+  const digits = cents % 100 === 0 ? 0 : 2;
+  return new Intl.NumberFormat(moneyFormat.locale, {
+    style: 'currency', currency: moneyFormat.currency, minimumFractionDigits: digits, maximumFractionDigits: digits,
+  }).format(cents / 100);
+}
+
+export const currencySymbol = () =>
+  new Intl.NumberFormat(moneyFormat.locale, { style: 'currency', currency: moneyFormat.currency })
+    .formatToParts(0).find((p) => p.type === 'currency')?.value ?? moneyFormat.currency;
 
 export function distanceKm(a, b) {
   const toRad = (d) => (d * Math.PI) / 180;

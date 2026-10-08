@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { api, getToken, storeToken } from './api.js';
+import { setMoneyFormat } from './format.js';
 
 const SessionContext = createContext(null);
 
@@ -15,6 +16,7 @@ export function SessionProvider({ children }) {
   useEffect(() => {
     Promise.all([api('/config'), api('/categories')])
       .then(([cfg, cats]) => {
+        setMoneyFormat(cfg);
         setConfig(cfg);
         setCategories(cats);
       })

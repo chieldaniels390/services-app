@@ -5,7 +5,7 @@ import Chat from '../components/Chat.jsx';
 import MapView from '../components/MapView.jsx';
 import StatusTimeline from '../components/StatusTimeline.jsx';
 import { StarInput, Stars } from '../components/Stars.jsx';
-import { STATUS_LABELS, distanceKm, etaMinutes, money, when } from '../format.js';
+import { STATUS_LABELS, currencySymbol, distanceKm, etaMinutes, money, when } from '../format.js';
 import { useSession, useSocketEvent } from '../session.jsx';
 
 const NEXT_ACTION = {
@@ -73,7 +73,7 @@ function useLiveGps(active, emit) {
 
 export default function JobPage() {
   const jobId = Number(useParams().id);
-  const { user, config, socket } = useSession();
+  const { user, socket } = useSession();
   const navigate = useNavigate();
   const [job, setJob] = useState(null);
   const [error, setError] = useState('');
@@ -84,7 +84,6 @@ export default function JobPage() {
   const [simulating, setSimulating] = useState(false);
   const [sharingGps, setSharingGps] = useState(false);
   const isPro = user.role === 'provider';
-  const currency = config.currency;
 
   const load = useCallback(() => {
     api(`/jobs/${jobId}`)
@@ -196,18 +195,18 @@ export default function JobPage() {
           {isPro && job.distanceKm != null && <p className="muted small">{job.distanceKm} km away · ~{job.etaMinutes} min</p>}
           <dl className="price-lines">
             <dt>Upfront price{job.surge > 1 && <span className="surge"> ×{job.surge}</span>}</dt>
-            <dd>{money(job.estimatedCents, currency)}</dd>
+            <dd>{money(job.estimatedCents)}</dd>
             {job.status === 'completed' && (
               <>
-                <dt>Materials</dt><dd>{money(job.materialsCents, currency)}</dd>
-                <dt><strong>Total</strong></dt><dd><strong>{money(job.finalCents, currency)}</strong></dd>
+                <dt>Materials</dt><dd>{money(job.materialsCents)}</dd>
+                <dt><strong>Total</strong></dt><dd><strong>{money(job.finalCents)}</strong></dd>
               </>
             )}
             {isPro && (
               <>
-                {job.status === 'completed' && <><dt>Platform fee</dt><dd>−{money(job.finalCents - job.payoutCents, currency)}</dd></>}
+                {job.status === 'completed' && <><dt>Platform fee</dt><dd>−{money(job.finalCents - job.payoutCents)}</dd></>}
                 <dt><strong>{job.status === 'completed' ? 'You earned' : 'Your payout'}</strong></dt>
-                <dd><strong className="earn">{money(job.payoutCents, currency)}</strong></dd>
+                <dd><strong className="earn">{money(job.payoutCents)}</strong></dd>
               </>
             )}
           </dl>
@@ -217,7 +216,7 @@ export default function JobPage() {
 
         {isPro && job.status === 'requested' && (
           <button className="btn primary lg block" disabled={busy} onClick={() => act('/accept')}>
-            Accept job · earn {money(job.payoutCents, currency)}
+            Accept job · earn {money(job.payoutCents)}
           </button>
         )}
 
@@ -225,7 +224,7 @@ export default function JobPage() {
           <section className="card actions-card">
             {next.status === 'completed' && (
               <label>
-                Materials / parts cost ({currency})
+                Materials / parts cost ({currencySymbol()})
                 <input type="number" min="0" step="0.01" inputMode="decimal" placeholder="0.00" value={materials} onChange={(e) => setMaterials(e.target.value)} />
               </label>
             )}

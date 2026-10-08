@@ -4,12 +4,16 @@ import { io as connect } from 'socket.io-client';
 import { createApp } from '../src/app.js';
 import { openDb } from '../src/db.js';
 
-const HOME = { lat: 51.5074, lng: -0.1278 };
+const HOME = { lat: -26.2041, lng: 28.0473 }; // Johannesburg
 let server;
 let base;
 
 before(async () => {
-  ({ server } = createApp({ db: openDb(':memory:') }));
+  const geocoder = {
+    search: async (q) => [{ label: `Result for ${q}`, lat: -33.9249, lng: 18.4241 }],
+    reverse: async (lat, lng) => ({ label: 'Somewhere', lat, lng }),
+  };
+  ({ server } = createApp({ db: openDb(':memory:'), geocoder }));
   await new Promise((resolve) => server.listen(0, resolve));
   base = `http://localhost:${server.address().port}`;
 });
@@ -76,7 +80,7 @@ describe('job lifecycle', () => {
 
     const est = await call('POST', '/estimate', { token: customer.token, body: jobBody() });
     assert.equal(est.status, 200);
-    assert.equal(est.body.totalCents, 4900 + 8500);
+    assert.equal(est.body.totalCents, 45000 + 55000, 'plumbing quick fix: R450 call-out + 1h at R550');
     assert.ok(est.body.availableProviders >= 1);
 
     const created = await call('POST', '/jobs', { token: customer.token, body: jobBody() });
@@ -98,8 +102,8 @@ describe('job lifecycle', () => {
       assert.equal(res.body.status, status);
     }
     const done = await call('POST', `/jobs/${id}/status`, { token: pro.token, body: { status: 'completed', materialsCents: 1000 } });
-    assert.equal(done.body.finalCents, 13400 + 1000);
-    assert.equal(done.body.payoutCents, 14400 - Math.round(13400 * 0.15));
+    assert.equal(done.body.finalCents, 100000 + 1000);
+    assert.equal(done.body.payoutCents, 101000 - Math.round(100000 * 0.15));
 
     const rated = await call('POST', `/jobs/${id}/rate`, { token: customer.token, body: { rating: 5, comment: 'Great' } });
     assert.equal(rated.body.review.rating, 5);
@@ -168,6 +172,23 @@ describe('job lifecycle', () => {
   });
 });
 
+describe('address search', () => {
+  test('proxies search and reverse lookups for signed-in users', async () => {
+    const { token } = await register('customer');
+    const search = await call('GET', '/geocode/search?q=Long%20Street', { token });
+    assert.deepEqual(search.body, [{ label: 'Result for Long Street', lat: -33.9249, lng: 18.4241 }]);
+    const reverse = await call('GET', '/geocode/reverse?lat=-26.2&lng=28.04', { token });
+    assert.equal(reverse.body.label, 'Somewhere');
+  });
+
+  test('ignores short queries and requires sign-in', async () => {
+    const { token } = await register('customer');
+    assert.deepEqual((await call('GET', '/geocode/search?q=ab', { token })).body, []);
+    assert.equal((await call('GET', '/geocode/search?q=Long%20Street')).status, 401);
+    assert.equal((await call('GET', '/geocode/reverse?lat=999&lng=0', { token })).status, 400);
+  });
+});
+
 describe('realtime', () => {
   const socketFor = (token) => new Promise((resolve, reject) => {
     const s = connect(base, { auth: { token }, transports: ['websocket'] });
@@ -194,8 +215,8 @@ describe('realtime', () => {
       assert.equal((await msg).body, 'Gate code 1234');
 
       const loc = next(cs, 'provider:location');
-      ps.emit('location', { lat: 51.51, lng: -0.12 });
-      assert.deepEqual(await loc, { jobId: body.job.id, lat: 51.51, lng: -0.12 });
+      ps.emit('location', { lat: -26.2, lng: 28.05 });
+      assert.deepEqual(await loc, { jobId: body.job.id, lat: -26.2, lng: 28.05 });
     } finally {
       cs.close();
       ps.close();

@@ -3,7 +3,7 @@ import { useSession } from '../session.jsx';
 import { money } from '../format.js';
 
 export default function Landing() {
-  const { categories, config } = useSession();
+  const { categories } = useSession();
   return (
     <div className="landing">
       <section className="hero">
@@ -21,7 +21,7 @@ export default function Landing() {
           <div key={c.id} className="category static">
             <span className="icon">{c.icon}</span>
             <strong>{c.name}</strong>
-            <span className="muted small">from {money(c.calloutCents + c.hourlyCents, config.currency)}</span>
+            <span className="muted small">from {money(c.calloutCents + c.hourlyCents)}</span>
           </div>
         ))}
       </section>

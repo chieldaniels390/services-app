@@ -31,7 +31,7 @@ export default function History() {
             <div className="muted small">{when(j.createdAt)} · {isPro ? j.customer.name : j.provider?.name ?? 'No pro yet'}</div>
           </div>
           <div className="right">
-            <strong>{money(isPro ? j.payoutCents : j.finalCents ?? j.estimatedCents, config.currency)}</strong>
+            <strong>{money(isPro ? j.payoutCents : j.finalCents ?? j.estimatedCents)}</strong>
             <span className={`pill status-${j.status}`}>{STATUS_LABELS[j.status]}</span>
           </div>
         </Link>

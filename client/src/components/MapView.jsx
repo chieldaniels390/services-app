@@ -40,11 +40,20 @@ function Frame({ points }) {
   return null;
 }
 
+/** Jumps to street level on a point the user explicitly chose (an address or their GPS fix). */
+function Focus({ point }) {
+  const map = useMap();
+  useEffect(() => {
+    if (point) map.setView(point, Math.max(map.getZoom(), 16), { animate: false });
+  }, [point, map]);
+  return null;
+}
+
 /**
  * markers: [{ id, lat, lng, emoji, variant, label }]
  * frame: points the view should keep in shot.
  */
-export default function MapView({ center, markers = [], frame = [], onPick, className = '' }) {
+export default function MapView({ center, markers = [], frame = [], focus, onPick, className = '' }) {
   const framePoints = useMemo(() => frame.filter(Boolean), [frame]);
   return (
     <div className={`map ${className}`}>
@@ -60,6 +69,8 @@ export default function MapView({ center, markers = [], frame = [], onPick, clas
         ))}
         <ClickToPick onPick={onPick} />
         <Frame points={framePoints} />
+        {/* After Frame, so an explicit focus wins over automatic framing in the same render. */}
+        <Focus point={focus} />
       </MapContainer>
     </div>
   );

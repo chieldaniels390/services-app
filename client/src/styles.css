@@ -249,3 +249,21 @@ button.category:hover { transform: translateY(-2px); border-color: var(--brand);
   .topbar nav { gap: 0.7rem; font-size: 0.85rem; }
   .stats strong { font-size: 1rem; }
 }
+
+/* Address search */
+.address-search { position: relative; }
+.address-input { position: relative; }
+.address-input input { padding-right: 2.2rem; }
+.spinner {
+  position: absolute; right: 0.75rem; top: 50%; width: 16px; height: 16px; margin-top: -8px;
+  border: 2px solid var(--border); border-top-color: var(--brand); border-radius: 50%; animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.suggestions {
+  position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); margin: 0; padding: 0.3rem; list-style: none;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
+  font-weight: 400; max-height: 260px; overflow-y: auto;
+}
+.suggestions li { padding: 0.6rem 0.65rem; border-radius: 8px; cursor: pointer; font-size: 0.9rem; }
+.suggestions li.active { background: var(--brand-soft); }
+.suggestions li.empty { cursor: default; color: var(--muted); }

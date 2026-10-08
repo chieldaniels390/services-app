@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
+import AddressSearch from '../components/AddressSearch.jsx';
 import MapView from '../components/MapView.jsx';
-import { ACTIVE_STATUSES, STATUS_LABELS, money } from '../format.js';
+import { ACTIVE_STATUSES, STATUS_LABELS, distanceKm, money } from '../format.js';
 import { useSession, useSocketEvent } from '../session.jsx';
 
 export default function CustomerHome() {
@@ -11,6 +12,7 @@ export default function CustomerHome() {
   const [categoryId, setCategoryId] = useState(null);
   const [size, setSize] = useState('small');
   const [location, setLocation] = useState(config.defaultCenter);
+  const [focus, setFocus] = useState(null);
   const [address, setAddress] = useState('');
   const [description, setDescription] = useState('');
   const [timing, setTiming] = useState('now');
@@ -35,10 +37,31 @@ export default function CustomerHome() {
     return () => clearTimeout(t);
   }, [categoryId, size, location]);
 
+  // Latest reverse lookup wins, so quick successive taps can't leave a stale address behind.
+  const lookup = useRef(0);
+  async function placePin(point, { zoom = false } = {}) {
+    setLocation(point);
+    if (zoom) setFocus(point);
+    const n = ++lookup.current;
+    try {
+      const place = await api(`/geocode/reverse?lat=${point.lat}&lng=${point.lng}`);
+      if (n === lookup.current && place) setAddress(place.label);
+    } catch {
+      // Address lookup is a convenience; the pin is what matters.
+    }
+  }
+
+  function chooseAddress(result) {
+    lookup.current++;
+    setAddress(result.label);
+    setLocation({ lat: result.lat, lng: result.lng });
+    setFocus({ lat: result.lat, lng: result.lng });
+  }
+
   function locate() {
     if (!navigator.geolocation) return setError('Location is not available in this browser - tap the map instead');
     navigator.geolocation.getCurrentPosition(
-      (pos) => setLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      (pos) => placePin({ lat: pos.coords.latitude, lng: pos.coords.longitude }, { zoom: true }),
       () => setError('Could not get your location - tap the map to place the pin'),
       { enableHighAccuracy: true, timeout: 10000 },
     );
@@ -67,6 +90,8 @@ export default function CustomerHome() {
     { id: 'home', ...location, emoji: '🏠', variant: 'home', label: 'Job location' },
     ...(estimate?.nearby ?? []).map((p, i) => ({ id: `pro-${i}`, ...p, emoji: category?.icon ?? '🧰', variant: 'pro' })),
   ];
+  // Keep the closest pros in shot, but ignore ones left over from a quote for a far-away pin.
+  const frame = [location, ...(estimate?.nearby ?? []).filter((p) => distanceKm(p, location) < 15).slice(0, 3)];
 
   return (
     <div className="customer-home">
@@ -93,20 +118,19 @@ export default function CustomerHome() {
         </>
       ) : (
         <div className="request-layout">
-          <MapView className="tall" center={location} markers={markers} frame={[location, ...(estimate?.nearby ?? []).slice(0, 3)]} onPick={setLocation} />
+          <MapView className="tall" center={location} markers={markers} frame={frame} focus={focus} onPick={placePin} />
 
           <form className="card request-form" onSubmit={submit}>
             <button type="button" className="link back" onClick={() => setCategoryId(null)}>‹ All services</button>
             <h2>{category.icon} {category.name}</h2>
 
-            <label>
-              Where?
-              <div className="row">
-                <input required placeholder="Street address, flat number…" value={address} onChange={(e) => setAddress(e.target.value)} />
-                <button type="button" className="btn" onClick={locate} title="Use my location">📍</button>
-              </div>
-              <span className="hint">Tap the map to move the pin.</span>
-            </label>
+            <div className="field">
+              <span>Where?</span>
+              <AddressSearch value={address} onChange={setAddress} onSelect={chooseAddress}>
+                <button type="button" className="btn" onClick={locate} title="Use my location" aria-label="Use my location">📍</button>
+              </AddressSearch>
+              <span className="hint">Pick a suggestion or tap the map to place the pin. Add your unit or complex number after.</span>
+            </div>
 
             <label>
               What's the problem?
@@ -139,11 +163,11 @@ export default function CustomerHome() {
               <div className="quote">
                 <div className="quote-total">
                   <span>Upfront price</span>
-                  <strong>{money(estimate.totalCents, config.currency)}</strong>
+                  <strong>{money(estimate.totalCents)}</strong>
                 </div>
                 <div className="quote-lines small muted">
-                  <span>Call-out {money(estimate.calloutCents, config.currency)}</span>
-                  <span>Labour {estimate.hours}h · {money(estimate.labourCents, config.currency)}</span>
+                  <span>Call-out {money(estimate.calloutCents)}</span>
+                  <span>Labour {estimate.hours}h · {money(estimate.labourCents)}</span>
                   {estimate.surge > 1 && <span className="surge">High demand ×{estimate.surge}</span>}
                 </div>
                 <p className="small">
@@ -157,7 +181,7 @@ export default function CustomerHome() {
 
             {error && <p className="error">{error}</p>}
             <button className="btn primary lg block" disabled={busy || !estimate}>
-              Request {category.name.toLowerCase()} pro{estimate ? ` · ${money(estimate.totalCents, config.currency)}` : ''}
+              Request {category.name.toLowerCase()} pro{estimate ? ` · ${money(estimate.totalCents)}` : ''}
             </button>
           </form>
         </div>

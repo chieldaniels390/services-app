@@ -19,7 +19,6 @@ export default function ProviderHome() {
   const [fresh, setFresh] = useState(new Set());
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState(null);
-  const currency = config.currency;
 
   const refresh = useCallback(() => {
     api('/provider/requests').then(setRequests).catch((e) => setError(e.message));
@@ -73,7 +72,7 @@ export default function ProviderHome() {
   const here = profile.location ?? config.defaultCenter;
   const markers = [
     ...(profile.location ? [{ id: 'me', ...profile.location, emoji: '🚐', variant: 'pro', label: 'You' }] : []),
-    ...requests.map((j) => ({ id: `job-${j.id}`, ...j.location, emoji: j.category.icon, variant: 'home', label: `${j.category.name} · ${money(j.payoutCents, currency)}` })),
+    ...requests.map((j) => ({ id: `job-${j.id}`, ...j.location, emoji: j.category.icon, variant: 'home', label: `${j.category.name} · ${money(j.payoutCents)}` })),
   ];
   const myServices = categories.filter((c) => profile.categories.includes(c.id));
 
@@ -106,9 +105,9 @@ export default function ProviderHome() {
 
       {earnings && (
         <section className="stats">
-          <div><span className="muted small">Today</span><strong>{money(earnings.today.cents, currency)}</strong><span className="muted small">{plural(earnings.today.jobs, 'job')}</span></div>
-          <div><span className="muted small">Last 7 days</span><strong>{money(earnings.week.cents, currency)}</strong><span className="muted small">{plural(earnings.week.jobs, 'job')}</span></div>
-          <div><span className="muted small">All time</span><strong>{money(earnings.allTime.cents, currency)}</strong><span className="muted small">{plural(earnings.allTime.jobs, 'job')}</span></div>
+          <div><span className="muted small">Today</span><strong>{money(earnings.today.cents)}</strong><span className="muted small">{plural(earnings.today.jobs, 'job')}</span></div>
+          <div><span className="muted small">Last 7 days</span><strong>{money(earnings.week.cents)}</strong><span className="muted small">{plural(earnings.week.jobs, 'job')}</span></div>
+          <div><span className="muted small">All time</span><strong>{money(earnings.allTime.cents)}</strong><span className="muted small">{plural(earnings.allTime.jobs, 'job')}</span></div>
         </section>
       )}
 
@@ -134,7 +133,7 @@ export default function ProviderHome() {
                   {j.distanceKm} km · ~{j.etaMinutes} min away{j.scheduledFor ? ` · ${when(j.scheduledFor)}` : ' · ASAP'}
                 </div>
               </div>
-              <strong className="earn">{money(j.payoutCents, currency)}</strong>
+              <strong className="earn">{money(j.payoutCents)}</strong>
             </div>
             <p>{j.description}</p>
             <div className="row">

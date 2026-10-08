@@ -8,13 +8,14 @@ import { createToken, hashPassword, readToken, verifyPassword } from './auth.js'
 import { config } from './config.js';
 import { transaction } from './db.js';
 import { HttpError, badRequest, conflict, forbidden } from './errors.js';
+import { createGeocoder } from './geocoder.js';
 import { isValidPoint } from './geo.js';
 import { createJobService, ratingOf } from './jobs.js';
 import { JOB_SIZES } from './pricing.js';
 
 const CLIENT_DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../client/dist');
 
-export function createApp({ db }) {
+export function createApp({ db, geocoder = createGeocoder(config.geocoder) }) {
   const app = express();
   const server = createServer(app);
   const io = new Server(server, { cors: { origin: true } });
@@ -72,6 +73,7 @@ export function createApp({ db }) {
 
   api.get('/config', (_req, res) => res.json({
     currency: config.currency,
+    locale: config.locale,
     defaultCenter: config.defaultCenter,
     platformFeeRate: config.platformFeeRate,
     jobSizes: JOB_SIZES,
@@ -124,6 +126,19 @@ export function createApp({ db }) {
   });
 
   api.get('/me', auth(), (req, res) => res.json(profileOf(req.user)));
+
+  // --- Address search (proxied so the geocoder's rate limit and User-Agent rules are enforced in one place) ---
+
+  api.get('/geocode/search', auth(), async (req, res) => {
+    const q = String(req.query.q ?? '').trim();
+    if (q.length < 3) return res.json([]);
+    res.json(await geocoder.search(q.slice(0, 200)));
+  });
+
+  api.get('/geocode/reverse', auth(), async (req, res) => {
+    const { lat, lng } = point(req.query);
+    res.json(await geocoder.reverse(lat, lng));
+  });
 
   // --- Customers --------------------------------------------------------
 
