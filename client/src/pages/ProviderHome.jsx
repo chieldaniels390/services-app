@@ -33,6 +33,7 @@ export default function ProviderHome() {
   });
   useSocketEvent('job:taken', ({ id }) => setRequests((prev) => prev.filter((j) => j.id !== id)));
   useSocketEvent('job:updated', refresh);
+  useSocketEvent('payouts:updated', refresh);
 
   async function updateStatus(body) {
     setError('');
@@ -95,6 +96,14 @@ export default function ProviderHome() {
 
       {error && <p className="error">{error}</p>}
 
+      {!profile.payoutAccount && (
+        <Link to="/payouts" className="banner warn">
+          <span className="icon">🏦</span>
+          <span><strong>Add your bank account</strong> so we can pay you when you finish jobs.</span>
+          <span className="arrow">›</span>
+        </Link>
+      )}
+
       {activeJob && (
         <Link to={`/jobs/${activeJob.id}`} className="banner">
           <span className="icon">{activeJob.category.icon}</span>
@@ -103,6 +112,9 @@ export default function ProviderHome() {
         </Link>
       )}
 
+      {earnings && earnings.pendingPayoutCents > 0 && (
+        <Link to="/payouts" className="small">{money(earnings.pendingPayoutCents)} on its way to your bank ›</Link>
+      )}
       {earnings && (
         <section className="stats">
           <div><span className="muted small">Today</span><strong>{money(earnings.today.cents)}</strong><span className="muted small">{plural(earnings.today.jobs, 'job')}</span></div>

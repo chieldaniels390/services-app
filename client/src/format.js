@@ -42,6 +42,7 @@ export function timeOnly(value) {
 }
 
 export const STATUS_LABELS = {
+  awaiting_payment: 'Awaiting payment',
   requested: 'Finding a pro',
   accepted: 'Pro assigned',
   en_route: 'On the way',
@@ -51,4 +52,15 @@ export const STATUS_LABELS = {
   cancelled: 'Cancelled',
 };
 
-export const ACTIVE_STATUSES = ['requested', 'accepted', 'en_route', 'arrived', 'in_progress'];
+export const ACTIVE_STATUSES = ['awaiting_payment', 'requested', 'accepted', 'en_route', 'arrived', 'in_progress'];
+
+export const PAYOUT_LABELS = {
+  awaiting_details: 'Waiting for your bank details',
+  sending: 'Sending…',
+  processing: 'On its way to your bank',
+  paid: 'Paid to your bank',
+  failed: 'Failed',
+};
+
+/** Paystack's hosted checkout; it sends the customer back to the job page when they're done. */
+export const goToCheckout = (url) => window.location.assign(url);

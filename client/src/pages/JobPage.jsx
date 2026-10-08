@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api.js';
 import Chat from '../components/Chat.jsx';
 import MapView from '../components/MapView.jsx';
 import StatusTimeline from '../components/StatusTimeline.jsx';
 import { StarInput, Stars } from '../components/Stars.jsx';
-import { STATUS_LABELS, currencySymbol, distanceKm, etaMinutes, money, when } from '../format.js';
+import { PAYOUT_LABELS, STATUS_LABELS, currencySymbol, distanceKm, etaMinutes, goToCheckout, money, when } from '../format.js';
 import { useSession, useSocketEvent } from '../session.jsx';
 
 const NEXT_ACTION = {
@@ -20,6 +20,7 @@ function headline(job, isPro) {
   const pro = job.provider?.name.split(' ')[0];
   const customer = job.customer.name.split(' ')[0];
   switch (job.status) {
+    case 'awaiting_payment': return 'Pay to send your request';
     case 'requested': return isPro ? 'New request' : 'Finding you a pro…';
     case 'accepted': return isPro ? `Head to ${customer} when ready` : `${pro} accepted your job`;
     case 'en_route': return isPro ? `Driving to ${customer}` : `${pro} is on the way`;
@@ -29,6 +30,17 @@ function headline(job, isPro) {
     case 'cancelled': return job.cancelledBy === 'customer' && !isPro ? 'You cancelled this request' : 'This job was cancelled';
     default: return STATUS_LABELS[job.status];
   }
+}
+
+const CUSTOMER_PAYMENT = {
+  paid: 'Paid ✓',
+  refund_pending: 'Refund on its way',
+  refunded: 'Refunded',
+};
+
+function cancelPrompt(job, proReleasing) {
+  if (proReleasing) return 'Release this job so another pro can take it?';
+  return job.paymentStatus === 'paid' ? 'Cancel this request? You will get a full refund to your card.' : 'Cancel this request?';
 }
 
 /** Moves the pro toward the job in small steps so the live-tracking flow can be demoed without driving. */
@@ -83,6 +95,10 @@ export default function JobPage() {
   const [comment, setComment] = useState('');
   const [simulating, setSimulating] = useState(false);
   const [sharingGps, setSharingGps] = useState(false);
+  const [params, setParams] = useSearchParams();
+  // Paystack sends the customer back here with ?reference=... after checkout.
+  const returnedFrom = useRef(params.get('reference'));
+  const [paymentNotice, setPaymentNotice] = useState('');
   const isPro = user.role === 'provider';
 
   const load = useCallback(() => {
@@ -90,10 +106,36 @@ export default function JobPage() {
       .then((j) => { setJob(j); setError(''); })
       .catch((e) => setError(e.status === 403 ? 'This job is no longer available.' : e.message));
   }, [jobId]);
-  useEffect(load, [load]);
+  useEffect(() => {
+    const reference = returnedFrom.current;
+    if (!reference) return load();
+    returnedFrom.current = null;
+    setParams({}, { replace: true });
+    setPaymentNotice('Checking your payment…');
+    api(`/jobs/${jobId}/payment/confirm`, { method: 'POST', body: { reference } })
+      .then((j) => {
+        setJob(j);
+        const unpaid = j.status === 'awaiting_payment' || j.materialsStatus === 'unpaid';
+        setPaymentNotice(unpaid ? "Your payment didn't go through yet. You can try again below." : 'Payment received – thank you!');
+      })
+      .catch((e) => {
+        setPaymentNotice('');
+        setError(e.message);
+        load();
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load]);
 
   useSocketEvent('job:updated', (j) => j.id === jobId && setJob(j));
   useSocketEvent('job:taken', ({ id }) => id === jobId && isPro && job?.status === 'requested' && load());
+  // Confirmation messages fade after a few seconds; "checking" stays until the answer arrives.
+  useEffect(() => {
+    if (!paymentNotice || paymentNotice.startsWith('Checking')) return undefined;
+    const t = setTimeout(() => setPaymentNotice(''), 6000);
+    return () => clearTimeout(t);
+  }, [paymentNotice]);
+
+  useSocketEvent('payouts:updated', () => isPro && load());
   useSocketEvent('job:released', ({ id }) => id === jobId && navigate('/'));
   useSocketEvent('provider:location', ({ jobId: id, lat, lng }) => {
     if (id !== jobId) return;
@@ -112,10 +154,12 @@ export default function JobPage() {
   async function act(path, body) {
     setBusy(true);
     setError('');
+    setPaymentNotice('');
     try {
       const result = await api(`/jobs/${jobId}${path}`, { method: 'POST', body });
       if (result.status === 'released') return navigate('/');
-      setJob(result);
+      if (result.authorizationUrl) return goToCheckout(result.authorizationUrl);
+      setJob(result.job ?? result);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -133,7 +177,7 @@ export default function JobPage() {
 
   const next = mine && NEXT_ACTION[job.status];
   const providerLoc = job.provider?.location;
-  const customerCanCancel = !isPro && ['requested', 'accepted', 'en_route'].includes(job.status);
+  const customerCanCancel = !isPro && ['awaiting_payment', 'requested', 'accepted', 'en_route'].includes(job.status);
   const proCanRelease = mine && ['accepted', 'en_route'].includes(job.status);
   const eta = job.status === 'en_route' && providerLoc ? etaMinutes(distanceKm(providerLoc, job.location)) : null;
   const markers = [
@@ -159,8 +203,19 @@ export default function JobPage() {
           </div>
           {job.status === 'requested' && !isPro && <div className="searching"><span /></div>}
           {eta != null && <p className="eta">Arriving in about <strong>{eta} min</strong></p>}
-          <StatusTimeline job={job} />
+          {job.status === 'awaiting_payment' ? (
+            <>
+              <p className="muted">Your request goes out to nearby pros as soon as your payment clears. We hold it until the job is done.</p>
+              <button className="btn primary lg block" disabled={busy} onClick={() => act('/payment')}>
+                Pay {money(job.estimatedCents)} with Paystack
+              </button>
+            </>
+          ) : (
+            <StatusTimeline job={job} />
+          )}
         </section>
+
+        {paymentNotice && <p className="notice">{paymentNotice}</p>}
 
         {!isPro && job.provider && (
           <section className="card person">
@@ -202,6 +257,18 @@ export default function JobPage() {
                 <dt><strong>Total</strong></dt><dd><strong>{money(job.finalCents)}</strong></dd>
               </>
             )}
+            {!isPro && job.paymentStatus && job.paymentStatus !== 'unpaid' && (
+              <>
+                <dt>Upfront payment</dt>
+                <dd className={job.paymentStatus === 'paid' ? 'earn' : ''}>{CUSTOMER_PAYMENT[job.paymentStatus]}</dd>
+              </>
+            )}
+            {!isPro && job.materialsStatus && (
+              <>
+                <dt>Parts payment</dt>
+                <dd className={job.materialsStatus === 'paid' ? 'earn' : ''}>{job.materialsStatus === 'paid' ? 'Paid ✓' : 'Needs your approval'}</dd>
+              </>
+            )}
             {isPro && (
               <>
                 {job.status === 'completed' && <><dt>Platform fee</dt><dd>−{money(job.finalCents - job.payoutCents)}</dd></>}
@@ -211,6 +278,35 @@ export default function JobPage() {
             )}
           </dl>
         </section>
+
+        {mine && job.paymentStatus === 'paid' && job.status !== 'completed' && (
+          <p className="notice">🔒 The customer has paid. Your payout is released when you mark the job complete.</p>
+        )}
+
+        {mine && job.payouts?.length > 0 && (
+          <section className="card">
+            <h3>Your payout</h3>
+            {job.payouts.map((p, i) => (
+              <div key={i} className="payout-row">
+                <span>{p.kind === 'materials' ? 'Parts' : 'Job'} · {money(p.amountCents)}</span>
+                <span className={`pill payout-${p.status}`}>{PAYOUT_LABELS[p.status]}</span>
+                {p.failureReason && <span className="error small">{p.failureReason}</span>}
+              </div>
+            ))}
+            {job.materialsStatus === 'unpaid' && <p className="muted small">Parts ({money(job.materialsCents)}) are paid out once the customer approves them.</p>}
+            {job.payouts.some((p) => ['awaiting_details', 'failed'].includes(p.status)) && <Link to="/payouts" className="btn block">Manage payouts</Link>}
+          </section>
+        )}
+
+        {!isPro && job.materialsStatus === 'unpaid' && (
+          <section className="card highlight">
+            <h3>Approve parts: {money(job.materialsCents)}</h3>
+            <p className="muted small">{job.provider.name.split(' ')[0]} used parts or materials for this job. They're passed on at cost and go to your pro in full.</p>
+            <button className="btn primary lg block" disabled={busy} onClick={() => act('/materials/payment')}>
+              Pay {money(job.materialsCents)}
+            </button>
+          </section>
+        )}
 
         {error && <p className="error">{error}</p>}
 
@@ -253,7 +349,7 @@ export default function JobPage() {
           <button
             className="btn danger block"
             disabled={busy}
-            onClick={() => window.confirm(proCanRelease ? 'Release this job so another pro can take it?' : 'Cancel this request?') && act('/cancel')}
+            onClick={() => window.confirm(cancelPrompt(job, proCanRelease)) && act('/cancel')}
           >
             {proCanRelease ? 'Release job' : 'Cancel request'}
           </button>

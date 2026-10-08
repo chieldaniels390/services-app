@@ -11,18 +11,20 @@ import { HttpError, badRequest, conflict, forbidden } from './errors.js';
 import { createGeocoder } from './geocoder.js';
 import { isValidPoint } from './geo.js';
 import { createJobService, ratingOf } from './jobs.js';
+import { createPaystack } from './paystack.js';
 import { JOB_SIZES } from './pricing.js';
 
 const CLIENT_DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../client/dist');
 
-export function createApp({ db, geocoder = createGeocoder(config.geocoder) }) {
+export function createApp({ db, geocoder = createGeocoder(config.geocoder), paystack = createPaystack(config.paystack) }) {
   const app = express();
   const server = createServer(app);
   const io = new Server(server, { cors: { origin: true } });
 
   const notify = (userId, event, payload) => io.to(`user:${userId}`).emit(event, payload);
   notify.providers = (event, payload) => io.to('providers').emit(event, payload);
-  const jobs = createJobService({ db, notify });
+  const jobs = createJobService({ db, notify, paystack });
+  const { payments } = jobs;
 
   const findUser = (id) => db.prepare('SELECT id, role, name, email, phone FROM users WHERE id = ?').get(id);
 
@@ -39,6 +41,9 @@ export function createApp({ db, geocoder = createGeocoder(config.geocoder) }) {
         rating: ratingOf(p.rating_sum, p.rating_count),
         ratingCount: p.rating_count,
         categories,
+        payoutAccount: p.payout_recipient_code
+          ? { bankName: p.payout_bank_name, last4: p.payout_account_last4, accountName: p.payout_account_name }
+          : null,
       },
     };
   }
@@ -65,6 +70,30 @@ export function createApp({ db, geocoder = createGeocoder(config.geocoder) }) {
     return id;
   };
 
+  // Paystack webhook: needs the raw body to check the signature, so it's registered before the JSON parser.
+  // Point Paystack at https://<your-domain>/api/paystack/webhook (Settings > API Keys & Webhooks).
+  app.post('/api/paystack/webhook', express.raw({ type: '*/*', limit: '1mb' }), async (req, res) => {
+    const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    if (!payments.isValidSignature(raw, req.get('x-paystack-signature'))) return res.sendStatus(401);
+    let event;
+    try {
+      event = JSON.parse(raw.toString('utf8'));
+    } catch {
+      return res.sendStatus(400);
+    }
+    const { data } = event;
+    try {
+      if (event.event === 'charge.success') await payments.confirm(data.reference);
+      else if (event.event?.startsWith('transfer.')) payments.transferEvent(event.event, data);
+      else if (event.event === 'refund.processed') payments.refundProcessed(data.transaction_reference ?? data.transaction?.reference);
+      res.sendStatus(200);
+    } catch (err) {
+      // A non-200 makes Paystack retry later, which is what we want for transient failures.
+      console.error('Paystack webhook failed', event.event, err);
+      res.sendStatus(500);
+    }
+  });
+
   app.use(express.json({ limit: '100kb' }));
   const api = express.Router();
   app.use('/api', api);
@@ -76,6 +105,7 @@ export function createApp({ db, geocoder = createGeocoder(config.geocoder) }) {
     locale: config.locale,
     defaultCenter: config.defaultCenter,
     platformFeeRate: config.platformFeeRate,
+    payments: { enabled: payments.configured, testMode: payments.testMode },
     jobSizes: JOB_SIZES,
   }));
 
@@ -146,13 +176,18 @@ export function createApp({ db, geocoder = createGeocoder(config.geocoder) }) {
     res.json(jobs.estimate({ ...req.body, ...point(req.body) }));
   });
 
-  api.post('/jobs', auth('customer'), (req, res) => {
-    res.status(201).json(jobs.create(req.user, { ...req.body, ...point(req.body) }));
+  api.post('/jobs', auth('customer'), async (req, res) => {
+    res.status(201).json(await jobs.create(req.user, { ...req.body, ...point(req.body) }));
   });
+  api.post('/jobs/:id/payment', auth('customer'), async (req, res) => res.json(await jobs.payBooking(req.user, jobId(req))));
+  api.post('/jobs/:id/payment/confirm', auth('customer'), async (req, res) => {
+    res.json(await jobs.confirmPayment(req.user, jobId(req), req.body?.reference));
+  });
+  api.post('/jobs/:id/materials/payment', auth('customer'), async (req, res) => res.json(await jobs.payMaterials(req.user, jobId(req))));
 
   api.get('/jobs', auth(), (req, res) => res.json(jobs.listForUser(req.user)));
   api.get('/jobs/:id', auth(), (req, res) => res.json(jobs.getForUser(req.user, jobId(req))));
-  api.post('/jobs/:id/cancel', auth(), (req, res) => res.json(jobs.cancel(req.user, jobId(req))));
+  api.post('/jobs/:id/cancel', auth(), async (req, res) => res.json(await jobs.cancel(req.user, jobId(req))));
   api.post('/jobs/:id/rate', auth('customer'), (req, res) => res.json(jobs.rate(req.user, jobId(req), req.body ?? {})));
   api.get('/jobs/:id/messages', auth(), (req, res) => res.json(jobs.messages(req.user, jobId(req))));
   api.post('/jobs/:id/messages', auth(), (req, res) => res.status(201).json(jobs.sendMessage(req.user, jobId(req), req.body?.body)));
@@ -176,9 +211,19 @@ export function createApp({ db, geocoder = createGeocoder(config.geocoder) }) {
 
   api.get('/provider/requests', auth('provider'), (req, res) => res.json(jobs.openRequestsFor(req.user)));
   api.get('/provider/earnings', auth('provider'), (req, res) => res.json(jobs.earnings(req.user)));
+  api.get('/provider/banks', auth('provider'), async (_req, res) => res.json(await payments.banks()));
+  api.put('/provider/payout-account', auth('provider'), async (req, res) => {
+    await payments.setPayoutAccount(req.user.id, req.body ?? {});
+    res.json(profileOf(req.user));
+  });
+  api.get('/provider/payouts', auth('provider'), (req, res) => res.json(payments.payoutsFor(req.user.id)));
+  api.post('/provider/payouts/retry', auth('provider'), async (req, res) => {
+    await payments.retryPayouts(req.user.id);
+    res.json(payments.payoutsFor(req.user.id));
+  });
   api.post('/jobs/:id/accept', auth('provider'), (req, res) => res.json(jobs.accept(req.user, jobId(req))));
-  api.post('/jobs/:id/status', auth('provider'), (req, res) => {
-    res.json(jobs.advance(req.user, jobId(req), {
+  api.post('/jobs/:id/status', auth('provider'), async (req, res) => {
+    res.json(await jobs.advance(req.user, jobId(req), {
       status: req.body?.status,
       materialsCents: req.body?.materialsCents ?? 0,
     }));

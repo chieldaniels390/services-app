@@ -1,7 +1,8 @@
 import { config } from './config.js';
 import { transaction } from './db.js';
-import { badRequest, conflict, forbidden, notFound } from './errors.js';
+import { HttpError, badRequest, conflict, forbidden, notFound } from './errors.js';
 import { distanceKm, etaMinutes } from './geo.js';
+import { createPaymentService } from './payments.js';
 import { JOB_SIZES, quote, settle, surgeMultiplier } from './pricing.js';
 
 export const ACTIVE_STATUSES = ['accepted', 'en_route', 'arrived', 'in_progress'];
@@ -31,7 +32,21 @@ const JOB_SELECT = `
 
 export const ratingOf = (sum, count) => (count ? Math.round((sum / count) * 10) / 10 : null);
 
-export function createJobService({ db, notify }) {
+export function createJobService({ db, notify, paystack }) {
+  const payments = createPaymentService({
+    db,
+    paystack,
+    appUrl: config.appUrl,
+    onBookingPaid: (id) => {
+      const row = getJobRow(id);
+      notifyParties(row);
+      dispatch(row);
+    },
+    onJobChanged: (id) => notifyParties(getJobRow(id)),
+    onPayoutChanged: (providerId) => notify(providerId, 'payouts:updated', {}),
+  });
+  const feeRateOf = (row) => row.fee_rate ?? config.platformFeeRate;
+
   const getCategory = (id) => db.prepare('SELECT * FROM categories WHERE id = ?').get(id);
   const getJobRow = (id) => db.prepare(`${JOB_SELECT} WHERE j.id = ?`).get(id);
 
@@ -84,8 +99,18 @@ export function createJobService({ db, notify }) {
       completedAt: row.completed_at,
       cancelledAt: row.cancelled_at,
     };
+    if (involved) {
+      // paymentStatus: unpaid | paid | refund_pending | refunded. materialsStatus: null | unpaid | paid.
+      dto.paymentStatus = row.payment_status;
+      dto.materialsStatus = row.materials_status;
+    }
     if (isProvider) {
-      dto.payoutCents = row.payout_cents ?? settle(row.estimated_cents, 0, config.platformFeeRate).payoutCents;
+      dto.payoutCents = row.payout_cents ?? settle(row.estimated_cents, 0, feeRateOf(row)).payoutCents;
+    }
+    if (isProvider && viewer.id === row.provider_id) {
+      dto.payouts = db.prepare(`
+        SELECT kind, amount_cents AS amountCents, status, failure_reason AS failureReason
+        FROM payouts WHERE job_id = ? AND provider_id = ? ORDER BY id`).all(row.id, viewer.id);
     }
     return dto;
   }
@@ -142,21 +167,61 @@ export function createJobService({ db, notify }) {
     return offered.length;
   }
 
-  function create(customer, input) {
+  /** Creates the job unpaid and returns a Paystack checkout link. Pros only see it once payment clears. */
+  async function create(customer, input) {
     const { categoryId, size, description, address, lat, lng, scheduledFor } = input;
     const est = estimate({ categoryId, size, lat, lng });
     if (!description?.trim()) throw badRequest('Describe the problem so pros know what to bring');
     if (!address?.trim()) throw badRequest('Address is required');
     if (scheduledFor && Number.isNaN(Date.parse(scheduledFor))) throw badRequest('Invalid scheduled time');
 
+    if (!payments.configured) throw new HttpError(503, 'Payments are not set up yet - add PAYSTACK_SECRET_KEY on the server');
+
     const { lastInsertRowid } = db.prepare(`
-      INSERT INTO jobs (customer_id, category_id, description, size, address, lat, lng, scheduled_for, surge, estimated_cents)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      INSERT INTO jobs (customer_id, category_id, description, size, address, lat, lng, scheduled_for, surge, estimated_cents,
+        status, fee_rate)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_payment', ?)`)
       .run(customer.id, categoryId, description.trim().slice(0, 1000), size, address.trim().slice(0, 300),
-        lat, lng, scheduledFor ? new Date(scheduledFor).toISOString() : null, est.surge, est.totalCents);
-    const row = getJobRow(Number(lastInsertRowid));
-    const offeredTo = dispatch(row);
-    return { job: toDto(row, customer), offeredTo };
+        lat, lng, scheduledFor ? new Date(scheduledFor).toISOString() : null, est.surge, est.totalCents, config.platformFeeRate);
+    const id = Number(lastInsertRowid);
+    let payment;
+    try {
+      payment = await payments.startBooking(id);
+    } catch (err) {
+      // No checkout, no booking: don't leave an orphaned job behind.
+      db.prepare('DELETE FROM payments WHERE job_id = ?').run(id);
+      db.prepare('DELETE FROM jobs WHERE id = ?').run(id);
+      throw err;
+    }
+    return { job: toDto(getJobRow(id), customer), payment };
+  }
+
+  function requireCustomerJob(customer, id) {
+    const row = requireJob(id);
+    if (row.customer_id !== customer.id) throw forbidden();
+    return row;
+  }
+
+  /** A fresh checkout link for a booking that hasn't been paid yet. */
+  async function payBooking(customer, id) {
+    const row = requireCustomerJob(customer, id);
+    if (row.status !== 'awaiting_payment') throw conflict('This booking is already paid');
+    return payments.startBooking(id);
+  }
+
+  /** Called when the customer lands back from Paystack checkout (the webhook does the same server-side). */
+  async function confirmPayment(customer, id, reference) {
+    requireCustomerJob(customer, id);
+    const payment = payments.getPayment(String(reference ?? ''));
+    if (!payment || payment.job_id !== id) throw notFound('Payment not found');
+    await payments.confirm(payment.reference);
+    return toDto(getJobRow(id), customer);
+  }
+
+  async function payMaterials(customer, id) {
+    requireCustomerJob(customer, id);
+    const result = await payments.payMaterials(id);
+    return { ...result, job: toDto(getJobRow(id), customer) };
   }
 
   function listForUser(user) {
@@ -216,7 +281,7 @@ export function createJobService({ db, notify }) {
     return toDto(updated, provider);
   }
 
-  function advance(provider, id, { status, materialsCents = 0 }) {
+  async function advance(provider, id, { status, materialsCents = 0 }) {
     const row = requireJob(id);
     if (row.provider_id !== provider.id) throw forbidden();
     if (NEXT_STATUS[row.status] !== status) throw conflict(`Cannot move a job from ${row.status} to ${status}`);
@@ -225,11 +290,17 @@ export function createJobService({ db, notify }) {
       if (!Number.isInteger(materialsCents) || materialsCents < 0 || materialsCents > 1_000_000) {
         throw badRequest('Materials cost must be a non-negative amount');
       }
-      const bill = settle(row.estimated_cents, materialsCents, config.platformFeeRate);
-      db.prepare(`
+      const bill = settle(row.estimated_cents, materialsCents, feeRateOf(row));
+      const { changes } = db.prepare(`
         UPDATE jobs SET status = 'completed', completed_at = datetime('now'), materials_cents = ?,
-          final_cents = ?, platform_fee_cents = ?, payout_cents = ?
-        WHERE id = ?`).run(materialsCents, bill.finalCents, bill.platformFeeCents, bill.payoutCents, id);
+          final_cents = ?, platform_fee_cents = ?, payout_cents = ?, materials_status = ?
+        WHERE id = ? AND status = 'in_progress'`)
+        .run(materialsCents, bill.finalCents, bill.platformFeeCents, bill.payoutCents, materialsCents > 0 ? 'unpaid' : null, id);
+      if (!changes) throw conflict('This job has already been completed');
+      // Release the held booking money to the pro. Parts follow once the customer pays for them.
+      if (row.payment_status === 'paid') {
+        await payments.createPayout(row, 'labour', bill.payoutCents - materialsCents);
+      }
     } else {
       const stamp = status === 'in_progress' ? ", started_at = datetime('now')" : '';
       db.prepare(`UPDATE jobs SET status = ?${stamp} WHERE id = ?`).run(status, id);
@@ -239,12 +310,14 @@ export function createJobService({ db, notify }) {
     return toDto(updated, provider);
   }
 
-  function cancel(user, id) {
+  async function cancel(user, id) {
     const row = requireJob(id);
     if (user.id === row.customer_id) {
-      if (!['requested', 'accepted', 'en_route'].includes(row.status)) {
+      if (!['awaiting_payment', 'requested', 'accepted', 'en_route'].includes(row.status)) {
         throw conflict('This job can no longer be cancelled - talk to your pro');
       }
+      // Refund first: if Paystack refuses, the job stays as it was and the customer can try again.
+      if (row.payment_status === 'paid') await payments.refundBooking(id);
       db.prepare(`UPDATE jobs SET status = 'cancelled', cancelled_by = 'customer', cancelled_at = datetime('now') WHERE id = ?`).run(id);
       const updated = getJobRow(id);
       notifyParties(updated);
@@ -313,17 +386,22 @@ export function createJobService({ db, notify }) {
     const sum = (where) => db.prepare(`
       SELECT COALESCE(SUM(payout_cents), 0) AS cents, COUNT(*) AS jobs
       FROM jobs WHERE provider_id = ? AND status = 'completed' ${where}`).get(provider.id);
+    const payoutTotal = (statuses) => db.prepare(`
+      SELECT COALESCE(SUM(amount_cents), 0) AS cents FROM payouts
+      WHERE provider_id = ? AND status IN (${statuses.map((s) => `'${s}'`).join(', ')})`).get(provider.id).cents;
     return {
       today: sum("AND completed_at >= datetime('now', 'start of day')"),
       week: sum("AND completed_at >= datetime('now', '-7 days')"),
       allTime: sum(''),
+      paidOutCents: payoutTotal(['paid']),
+      pendingPayoutCents: payoutTotal(['awaiting_details', 'sending', 'processing', 'failed']),
       currency: config.currency,
     };
   }
 
   return {
     estimate, create, listForUser, getForUser, openRequestsFor, accept, advance, cancel, rate,
-    messages, sendMessage, relayLocation, earnings,
+    messages, sendMessage, relayLocation, earnings, payBooking, confirmPayment, payMaterials, payments,
   };
 }
 

@@ -2,7 +2,7 @@
 
 An Uber/Bolt-style marketplace for home services in South Africa: **plumbers, electricians, cleaners, locksmiths, handymen, aircon & heating, painters, appliance repair, pest control and gardeners**. Prices are in rand (ZAR).
 
-Customers get an upfront price, nearby pros receive the request in real time, the first to accept gets the job, and the customer tracks them live on a map until the work is done and rated.
+Customers get an upfront price and pay by card through **Paystack** when they book. Nearby pros receive the request in real time, the first to accept gets the job, and the customer tracks them live on a map until the work is done and rated.
 
 | Address search & upfront quote | Live tracking + chat | Pro dashboard |
 | --- | --- | --- |
@@ -18,7 +18,9 @@ Customers get an upfront price, nearby pros receive the request in real time, th
 - See how many pros are nearby and their ETA before booking
 - Live status (requested → accepted → on the way → arrived → in progress → completed) with the pro's position moving on the map
 - In-app chat and click-to-call with the assigned pro
-- Cancel before work starts; rate and review afterwards; booking history
+- Pay by card with Paystack at booking. The money is held until the job is done, and cancelling before work starts refunds it in full
+- Approve and pay for any parts the pro added (charged to the saved card, or via a new checkout)
+- Rate and review afterwards; booking history
 
 **Pros**
 - Sign up with the services you offer, go online/offline
@@ -27,10 +29,12 @@ Customers get an upfront price, nearby pros receive the request in real time, th
 - Step through the job, add materials cost on completion, open navigation in Google Maps
 - Share live GPS, or use **Demo drive** to simulate driving to the customer
 - Release a job you can't make – it goes straight back to other pros
+- Add a South African bank account and get paid automatically when a job is marked complete (job price minus the platform fee, plus parts in full)
+- Payouts page with transfer status and a retry button for failed transfers
 - Earnings for today / 7 days / all time, rating, job history
 
 **Platform**
-- Platform fee (default 15%) on labour; materials go 100% to the pro
+- Platform fee (default 15%, set with `PLATFORM_FEE_RATE`) on the upfront price; parts go 100% to the pro. Each job keeps the fee rate it was booked at
 - Busy pros (with an active job) are not offered new work
 - Role-based access: pros only see open requests in their categories, nobody else can read a job
 
@@ -53,6 +57,45 @@ Typical 2025/26 South African rates, set in `server/src/categories.js` (amounts 
 
 Standard jobs are quoted at 2 hours and big jobs at 4. Rates differ between cities and suburbs, so check them against local competitors before launch.
 
+## Payments (Paystack)
+
+```
+Customer books ──► Paystack checkout ──► money held in your Paystack balance
+                                              │
+        job goes out to pros once paid ◄──────┘
+                                              │
+Pro marks job complete ──► Paystack transfer to pro's bank: price − platform fee
+Customer approves parts ──► saved card charged ──► transfer to pro: parts in full
+Customer cancels before work starts ──► full refund
+```
+
+- Payment is confirmed with Paystack's API both when the customer returns from checkout and when the `charge.success` webhook arrives. Whichever comes first applies it, and repeats do nothing.
+- If a customer manages to pay twice, or pays for a booking they already cancelled, the extra payment is refunded automatically.
+- If a pro hasn't added bank details yet, or a transfer fails, the payout is kept. It's sent when they add their account or press **Retry failed** on the Payouts page.
+
+| Customer approves parts | Pro payouts |
+| --- | --- |
+| ![](docs/screenshots/approve-parts.png) | ![](docs/screenshots/payouts.png) |
+
+### Setting up Paystack (test mode)
+
+1. Create a Paystack account for South Africa and copy your **test secret key** (`sk_test_…`) from *Settings → API Keys & Webhooks*.
+2. Run the server with it:
+   ```bash
+   PAYSTACK_SECRET_KEY=sk_test_xxx APP_URL=http://localhost:5173 npm run dev
+   ```
+   The header shows a **Test** badge while a test key is in use.
+3. Pay with one of [Paystack's test cards](https://paystack.com/docs/payments/test-payments/). No real money moves.
+4. **Webhooks:** set the webhook URL to `https://<your-domain>/api/paystack/webhook`. Locally you can skip this, because payments are also confirmed when the customer returns from checkout. Transfer and refund updates do need the webhook, so use a tunnel such as `cloudflared` or `ngrok` to test those.
+5. **Payouts:** pros add their bank account on the Payouts page (it creates a Paystack transfer recipient). In the Paystack dashboard:
+   - make sure Transfers are enabled for your account;
+   - turn off OTP for transfers, otherwise API transfers will fail with a message saying so;
+   - transfers are paid from your Paystack balance, so check your settlement settings with Paystack so that collected payments stay available for payouts.
+
+Before going live:
+- Switch to your live key (`sk_live_…`).
+- Paystack's own fees for card payments and transfers come out of the platform's share, so set `PLATFORM_FEE_RATE` to cover them. See [Paystack pricing](https://paystack.com/za/pricing).
+
 ## Tech stack
 
 - **Server:** Node.js 22+, Express 5, Socket.IO, SQLite via Node's built-in `node:sqlite` (no native deps)
@@ -64,11 +107,13 @@ server/src
   app.js         HTTP routes + Socket.IO wiring
   jobs.js        job lifecycle, dispatch, chat, earnings
   pricing.js     quotes, surge, fee split
+  paystack.js    Paystack API client + webhook signature check
+  payments.js    booking payments, refunds, parts, payouts
   geocoder.js    address search / reverse lookup (Nominatim), throttled + cached
   db.js          schema
   seed.js        demo accounts
 client/src
-  pages/         Landing, Auth, CustomerHome, ProviderHome, JobPage, History
+  pages/         Landing, Auth, CustomerHome, ProviderHome, JobPage, History, Payouts
   components/    MapView, AddressSearch, Chat, StatusTimeline, Stars
 ```
 
@@ -93,7 +138,7 @@ Demo accounts:
 | locksmith@demo.com | Locksmith, Handyman |
 | handyman@demo.com | Handyman, Painting, Gardening |
 
-**Try the full flow:** open the app in two browser windows (one normal, one private). Sign in as `customer@demo.com` in one and `plumber@demo.com` in the other. Request a plumber as the customer and accept it as the pro, then tap *Start driving* → *Demo drive* to watch the van move on the customer's map.
+**Try the full flow** (needs a Paystack test key, see below): open the app in two browser windows (one normal, one private). Sign in as `customer@demo.com` in one and `plumber@demo.com` in the other. As the pro, add a bank account on the Payouts page. As the customer, request a plumber and pay with a test card. Then accept the job as the pro, then tap *Start driving* → *Demo drive* to watch the van move on the customer's map.
 
 ### Production
 
@@ -111,7 +156,10 @@ npm start         # serves API + app on PORT (default 4000)
 | `TOKEN_SECRET` | dev value | **Set this in production** |
 | `CURRENCY` | `ZAR` | ISO code used for display |
 | `LOCALE` | `en-ZA` | Number formatting locale |
-| `PLATFORM_FEE_RATE` | `0.15` | |
+| `PLATFORM_FEE_RATE` | `0.15` | Platform's share of the upfront price (0.15 = 15%). Applies to new bookings |
+| `PAYSTACK_SECRET_KEY` | – | `sk_test_…` for test mode. Booking is disabled until set |
+| `APP_URL` | `http://localhost:5173` | Public URL customers return to after checkout |
+| `PAYSTACK_BASE_URL` | `https://api.paystack.co` | Only changed for tests |
 | `DISPATCH_RADIUS_KM` | `30` | How far away pros get offered a job |
 | `DEFAULT_LAT` / `DEFAULT_LNG` | Johannesburg | Default map centre |
 | `GEOCODER_URL` | `https://nominatim.openstreetmap.org` | Any Nominatim-compatible API |
@@ -130,7 +178,8 @@ npm test
 
 ## Roadmap
 
-- Payments and payouts (e.g. Stripe Connect), cancellation fees
+- Cancellation fees once a pro is on the way; automatically expire unpaid bookings
+- Admin console for refunds, disputes and failed payouts
 - Pro verification (ID, licences, insurance) and an admin console
 - Photo uploads on requests, push notifications / SMS
 - Routing-based ETAs (road distance instead of straight line)

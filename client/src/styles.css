@@ -65,7 +65,7 @@ p { margin: 0 0 0.5rem; }
 .brand .logo { display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: 10px; background: var(--brand); font-size: 1rem; }
 .badge { font-size: 0.7rem; background: var(--accent); color: #111; padding: 0.1rem 0.45rem; border-radius: 999px; }
 .topbar nav { display: flex; gap: 1rem; align-items: center; font-size: 0.9rem; }
-.topbar nav a { text-decoration: none; color: var(--muted); font-weight: 600; }
+.topbar nav a { text-decoration: none; color: var(--muted); font-weight: 600; white-space: nowrap; }
 .topbar nav a.active { color: var(--text); }
 main { flex: 1; width: 100%; max-width: 1100px; margin: 0 auto; padding: 1rem; }
 .splash { min-height: 100vh; display: grid; place-items: center; font-size: 2.5rem; }
@@ -267,3 +267,27 @@ button.category:hover { transform: translateY(-2px); border-color: var(--brand);
 .suggestions li { padding: 0.6rem 0.65rem; border-radius: 8px; cursor: pointer; font-size: 0.9rem; }
 .suggestions li.active { background: var(--brand-soft); }
 .suggestions li.empty { cursor: default; color: var(--muted); }
+
+/* Payments */
+.badge.test { background: #fde68a; color: #78350f; font-weight: 700; }
+.test-note { background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 10px; padding: 0.5rem 0.75rem; margin-top: 0.5rem; }
+.notice { background: var(--brand-soft); border-radius: 12px; padding: 0.7rem 0.9rem; margin: 0; }
+.card.highlight { border-color: var(--accent); }
+.banner.warn { background: #fde68a; color: #422006; }
+.payouts { display: flex; flex-direction: column; gap: 0.75rem; max-width: 720px; margin: 0 auto; }
+.stats.two { grid-template-columns: repeat(2, 1fr); }
+.payout-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; padding: 0.6rem 0; border-top: 1px solid var(--border); }
+.payout-row:first-of-type { border-top: none; }
+.payout-row > span:first-child:not(.icon) { flex: 1; }
+.payout-row > .icon { flex: none; }
+.payout-row .error { flex-basis: 100%; }
+.link-row { text-decoration: none; color: var(--text); flex-wrap: nowrap; }
+.link-row .right { display: flex; flex-direction: column; align-items: flex-end; gap: 0.2rem; }
+.pill.payout-paid { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
+.pill.payout-failed { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+.pill.payout-awaiting_details { background: #fde68a; color: #78350f; }
+.pill.status-awaiting_payment { background: #fde68a; color: #78350f; }
+select {
+  width: 100%; padding: 0.7rem 0.8rem; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font: inherit; font-weight: 400;
+}

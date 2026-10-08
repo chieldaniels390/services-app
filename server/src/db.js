@@ -82,12 +82,63 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS messages_job ON messages (job_id);
+
+-- One row per payment attempt (each Paystack checkout or saved-card charge).
+CREATE TABLE IF NOT EXISTS payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id),
+  kind TEXT NOT NULL CHECK (kind IN ('booking', 'materials')),
+  reference TEXT NOT NULL UNIQUE,
+  amount_cents INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  authorization_url TEXT,
+  authorization_code TEXT,
+  paid_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS payments_job ON payments (job_id);
+
+-- Money owed to a pro, sent as Paystack transfers.
+CREATE TABLE IF NOT EXISTS payouts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id),
+  provider_id INTEGER NOT NULL REFERENCES users(id),
+  kind TEXT NOT NULL CHECK (kind IN ('labour', 'materials')),
+  amount_cents INTEGER NOT NULL,
+  reference TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'awaiting_details',
+  transfer_code TEXT,
+  failure_reason TEXT,
+  paid_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS payouts_provider ON payouts (provider_id);
 `;
+
+// Columns added after the first release. CREATE TABLE IF NOT EXISTS won't add them to an existing database.
+const ADDED_COLUMNS = [
+  ['jobs', 'payment_status', "TEXT NOT NULL DEFAULT 'unpaid'"],
+  ['jobs', 'materials_status', 'TEXT'],
+  ['jobs', 'fee_rate', 'REAL'],
+  ['provider_profiles', 'payout_recipient_code', 'TEXT'],
+  ['provider_profiles', 'payout_bank_name', 'TEXT'],
+  ['provider_profiles', 'payout_account_last4', 'TEXT'],
+  ['provider_profiles', 'payout_account_name', 'TEXT'],
+];
+
+function migrate(db) {
+  for (const [table, column, definition] of ADDED_COLUMNS) {
+    const exists = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
+    if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
 
 export function openDb(file = ':memory:') {
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
+  migrate(db);
   const upsert = db.prepare(`
     INSERT INTO categories (id, name, icon, description, callout_cents, hourly_cents)
     VALUES ($id, $name, $icon, $description, $callout, $hourly)

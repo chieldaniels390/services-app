@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { api } from '../api.js';
 import AddressSearch from '../components/AddressSearch.jsx';
 import MapView from '../components/MapView.jsx';
-import { ACTIVE_STATUSES, STATUS_LABELS, distanceKm, money } from '../format.js';
+import { ACTIVE_STATUSES, STATUS_LABELS, distanceKm, goToCheckout, money } from '../format.js';
 import { useSession, useSocketEvent } from '../session.jsx';
 
 export default function CustomerHome() {
   const { categories, config, user } = useSession();
-  const navigate = useNavigate();
   const [categoryId, setCategoryId] = useState(null);
   const [size, setSize] = useState('small');
   const [location, setLocation] = useState(config.defaultCenter);
@@ -72,14 +71,14 @@ export default function CustomerHome() {
     setBusy(true);
     setError('');
     try {
-      const { job } = await api('/jobs', {
+      const { payment } = await api('/jobs', {
         method: 'POST',
         body: {
           categoryId, size, description, address, ...location,
           scheduledFor: timing === 'later' && scheduledFor ? new Date(scheduledFor).toISOString() : undefined,
         },
       });
-      navigate(`/jobs/${job.id}`);
+      goToCheckout(payment.authorizationUrl);
     } catch (err) {
       setError(err.message);
       setBusy(false);
@@ -175,14 +174,24 @@ export default function CustomerHome() {
                     ? <>🟢 {estimate.availableProviders} pro{estimate.availableProviders > 1 ? 's' : ''} nearby · arrives in ~{estimate.etaMinutes} min</>
                     : <>🟠 No pros online nearby right now — you can still request and we'll notify pros as they come online.</>}
                 </p>
-                <p className="hint">Parts and materials, if needed, are added at cost by your pro.</p>
+                <p className="hint">Parts and materials, if needed, are added at cost by your pro and need your approval.</p>
               </div>
             )}
 
             {error && <p className="error">{error}</p>}
-            <button className="btn primary lg block" disabled={busy || !estimate}>
-              Request {category.name.toLowerCase()} pro{estimate ? ` · ${money(estimate.totalCents)}` : ''}
+            <button className="btn primary lg block" disabled={busy || !estimate || !config.payments.enabled}>
+              {busy ? 'Opening secure checkout…' : `Pay & request${estimate ? ` · ${money(estimate.totalCents)}` : ''}`}
             </button>
+            <p className="hint center">
+              🔒 Paid securely with Paystack. We hold your payment until the job is done, and you get a full refund if you cancel before work starts.
+            </p>
+            {!config.payments.enabled && <p className="error small center">Payments aren't set up on this server yet.</p>}
+            {config.payments.testMode && (
+              <p className="test-note small">
+                <strong>Test mode:</strong> no real money moves. Pay with a{' '}
+                <a href="https://paystack.com/docs/payments/test-payments/" target="_blank" rel="noreferrer">Paystack test card</a>.
+              </p>
+            )}
           </form>
         </div>
       )}
