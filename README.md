@@ -360,12 +360,16 @@ Demo accounts:
 
 **Try the full flow** (needs a Paystack test key, see below): open the app in two browser windows (one normal, one private). Sign in as `customer@demo.com` in one and `plumber@demo.com` in the other. As the pro, add a bank account on the Payouts page. As the customer, request a plumber and pay with a test card. Then accept the job as the pro, then tap *Start driving* → *Demo drive* to watch the van move on the customer's map.
 
-### Production
+### Production (and GitHub Codespaces)
 
 ```bash
-npm run build     # builds the client into client/dist
-npm start         # serves API + app on PORT (default 4000)
+npm start         # builds the client into client/dist, then serves API + app on PORT (default 4000)
+npm run serve     # serves without rebuilding (when client/dist is already current)
 ```
+
+Port 4000 serves whatever is in `client/dist`. That folder isn't in git, so after pulling changes run `npm start` again (not just `npm run serve`); the server prints a `***` warning at startup if the build is missing or older than the client code. `index.html` is sent with `Cache-Control: no-cache`, so a normal reload picks up a new build.
+
+In Codespaces, `APP_URL` (used for Paystack's return address and Share my job links) defaults to the forwarded address of `PORT`, e.g. `https://<codespace>-4000.app.github.dev`. During `npm run dev`, open port 5173 instead and set `APP_URL` to that port's address.
 
 ### Configuration
 
@@ -388,7 +392,7 @@ npm start         # serves API + app on PORT (default 4000)
 | `LOCALE` | `en-ZA` | Number formatting locale |
 | `PLATFORM_FEE_RATE` | `0.15` | Platform's share of the upfront price (0.15 = 15%). Applies to new bookings |
 | `PAYSTACK_SECRET_KEY` | – | `sk_test_…` for test mode. Booking is disabled until set |
-| `APP_URL` | `http://localhost:5173` | Public URL customers return to after checkout |
+| `APP_URL` | Codespaces: forwarded address of `PORT`; otherwise `http://localhost:5173` | Public URL customers return to after checkout, and the base of Share my job links |
 | `SMS_PROVIDER` | `console` | `console`, `none`, `twilio` or `bulksms` (see Notifications) |
 | `SMS_DEFAULT_COUNTRY_CODE` | `27` | Used to turn local numbers like `082…` into `+27…` |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | generated | Web Push keys. Set them if you run more than one server |

@@ -1,4 +1,5 @@
 import { createApp } from './app.js';
+import { clientBuildProblem } from './clientBuild.js';
 import { config } from './config.js';
 import { openDb } from './db.js';
 
@@ -17,8 +18,14 @@ if (!config.paystack.secretKey) {
   console.log('Paystack is in TEST mode - no real money moves.');
 }
 
+const buildProblem = clientBuildProblem();
+if (buildProblem) {
+  console.warn(`\n*** ${buildProblem}\n*** Run "npm start" from the project root (it builds first), or "npm run build", then restart.\n`);
+}
+
 const db = openDb(config.dbFile);
 const { server } = createApp({ db });
 server.listen(config.port, () => {
-  console.log(`Services API listening on http://localhost:${config.port}`);
+  console.log(`ProNow listening on http://localhost:${config.port}`);
+  if (config.appUrl !== 'http://localhost:5173') console.log(`Public URL: ${config.appUrl}`);
 });
