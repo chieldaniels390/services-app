@@ -71,7 +71,17 @@ Typical 2025/26 South African rates, set in `server/src/categories.js` (amounts 
 | Pest Control | R500 | R550 | R1 050 |
 | Gardening | R150 | R180 | R330 |
 
-Standard jobs are quoted at 2 hours and big jobs at 4. Rates differ between cities and suburbs, so check them against local competitors before launch.
+Standard jobs are quoted at 2 hours and big jobs at 4.
+
+**How prices are shown.** Amounts are always whole rands, written the South African way: **R1 000**, with a space between thousands and no cents or "ZAR".
+- Quotes (including busy-time pricing), the platform fee and parts are rounded to the nearest rand, so payouts are whole rands too. On-screen totals always add up.
+- The one exception is the **VAT line on a tax invoice**, which keeps its cents (e.g. "Includes VAT at 15%: R130.43"), because the VAT must be exact.
+
+**Service cards** show "Call-out from R450". The full upfront price appears on the booking form only once the customer picks the job size (quick fix, standard or big job); no size is preselected.
+
+| Service cards | Before a size is picked |
+| --- | --- |
+| ![](docs/screenshots/service-cards.png) | ![](docs/screenshots/pick-size.png) | Rates differ between cities and suburbs, so check them against local competitors before launch.
 
 ## Who gets offered a job
 

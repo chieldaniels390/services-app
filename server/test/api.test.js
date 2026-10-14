@@ -1477,6 +1477,18 @@ describe('emergency button', () => {
   });
 });
 
+describe('whole-rand amounts', () => {
+  test('parts entered with cents are rounded to whole rands', async () => {
+    const customer = await register('customer');
+    const pro = await onlinePro();
+    const id = await completedJob(customer, pro, { materialsCents: 1250 });
+    const job = (await call('GET', `/jobs/${id}`, { token: customer.token })).body;
+    assert.equal(job.materialsCents, 1300);
+    assert.equal(job.finalCents % 100, 0);
+    assert.equal((await call('GET', `/jobs/${id}`, { token: pro.token })).body.payoutCents % 100, 0);
+  });
+});
+
 describe('address search', () => {
   test('proxies search and reverse lookups for signed-in users', async () => {
     const { token } = await register('customer');

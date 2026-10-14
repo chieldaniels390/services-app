@@ -6,17 +6,24 @@ export function setMoneyFormat({ currency, locale }) {
 }
 
 /** R1 250 for whole amounts, R1 250,50 otherwise. */
+/**
+ * Whole units, no cents. Rands are written the South African way: "R1 000", with a non-breaking space
+ * between thousands so a price never splits across lines. Other currencies use the browser's format.
+ */
 export function money(cents) {
   if (cents == null) return '–';
-  const digits = cents % 100 === 0 ? 0 : 2;
+  const whole = Math.round(cents / 100);
+  if (moneyFormat.currency === 'ZAR') {
+    return `${whole < 0 ? '-' : ''}R${Math.abs(whole).toLocaleString('en-US').replace(/,/g, '\u00a0')}`;
+  }
   return new Intl.NumberFormat(moneyFormat.locale, {
-    style: 'currency', currency: moneyFormat.currency, minimumFractionDigits: digits, maximumFractionDigits: digits,
-  }).format(cents / 100);
+    style: 'currency', currency: moneyFormat.currency, maximumFractionDigits: 0,
+  }).format(whole);
 }
 
-export const currencySymbol = () =>
+export const currencySymbol = () => (moneyFormat.currency === 'ZAR' ? 'R' :
   new Intl.NumberFormat(moneyFormat.locale, { style: 'currency', currency: moneyFormat.currency })
-    .formatToParts(0).find((p) => p.type === 'currency')?.value ?? moneyFormat.currency;
+    .formatToParts(0).find((p) => p.type === 'currency')?.value ?? moneyFormat.currency);
 
 export function distanceKm(a, b) {
   const toRad = (d) => (d * Math.PI) / 180;

@@ -9,7 +9,7 @@ import { useSession, useSocketEvent } from '../session.jsx';
 export default function CustomerHome() {
   const { categories, config, user } = useSession();
   const [categoryId, setCategoryId] = useState(null);
-  const [size, setSize] = useState('small');
+  const [size, setSize] = useState(null); // no default: the full estimate shows once the customer picks a size
   const [location, setLocation] = useState(config.defaultCenter);
   const [focus, setFocus] = useState(null);
   const [address, setAddress] = useState('');
@@ -57,7 +57,7 @@ export default function CustomerHome() {
   useSocketEvent('job:updated', () => loadActive().catch(() => {}));
 
   useEffect(() => {
-    if (!categoryId) return undefined;
+    if (!categoryId || !size) return undefined;
     const t = setTimeout(() => {
       // Pros are matched on their working hours at the booked time, so a scheduled quote checks that time.
       api('/estimate', { method: 'POST', body: { categoryId, size, ...location, scheduledFor: pickedTime, preferredProviderId: preferredPro?.id } })
@@ -136,10 +136,11 @@ export default function CustomerHome() {
           <h2>Hi {user.name.split(' ')[0]}, what do you need help with?</h2>
           <div className="grid categories">
             {categories.map((c) => (
-              <button key={c.id} className="category" onClick={() => { setCategoryId(c.id); setEstimate(null); setError(''); }}>
+              <button key={c.id} className="category" onClick={() => { setCategoryId(c.id); setSize(null); setEstimate(null); setError(''); }}>
                 <span className="icon">{c.icon}</span>
                 <strong>{c.name}</strong>
                 <span className="muted small">{c.description}</span>
+                <span className="from-price">Call-out from {money(c.calloutCents)}</span>
               </button>
             ))}
           </div>
@@ -169,7 +170,7 @@ export default function CustomerHome() {
               <span>How big is the job?</span>
               <div className="segmented">
                 {Object.entries(config.jobSizes).map(([key, s]) => (
-                  <button type="button" key={key} className={size === key ? 'on' : ''} onClick={() => setSize(key)}>
+                  <button type="button" key={key} className={size === key ? 'on' : ''} aria-pressed={size === key} onClick={() => setSize(key)}>
                     {s.label}<small>~{s.hours}h</small>
                   </button>
                 ))}
@@ -215,7 +216,14 @@ export default function CustomerHome() {
               </div>
             )}
 
-            {estimate && (
+            {!size && (
+              <div className="quote pending-quote">
+                <span>Call-out from <strong>{money(category.calloutCents)}</strong></span>
+                <p className="muted small">Pick how big the job is to see your full upfront price.</p>
+              </div>
+            )}
+
+            {size && estimate && (
               <div className="quote">
                 <div className="quote-total">
                   <span>Upfront price</span>
@@ -236,7 +244,7 @@ export default function CustomerHome() {
             )}
 
             {error && <p className="error">{error}</p>}
-            <button className="btn primary lg block" disabled={busy || !estimate || !config.payments.enabled}>
+            <button className="btn primary lg block" disabled={busy || !size || !estimate || !config.payments.enabled}>
               {busy ? 'Opening secure checkout…' : `${timing === 'repeat' ? 'Pay first visit & set up' : 'Pay & request'}${estimate ? ` · ${money(estimate.totalCents)}` : ''}`}
             </button>
             <p className="hint center">

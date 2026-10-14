@@ -6,6 +6,7 @@ import { hashPassword } from './auth.js';
 import { config } from './config.js';
 import { openDb, transaction } from './db.js';
 import { solidPng } from './png.js';
+import { toWholeRand } from './pricing.js';
 
 const PASSWORD = 'password123';
 const PROS = [
@@ -97,7 +98,7 @@ if (!hasHistory) {
     // Oldest first, so job numbers go up over time like real bookings.
     for (const [daysAgo, hours, parts] of [...history].reverse()) {
       const estimated = callout + hourly * hours;
-      const fee = Math.round(estimated * config.platformFeeRate);
+      const fee = toWholeRand(estimated * config.platformFeeRate);
       const done = new Date(Date.now() - daysAgo * 86400000 - (2 + (daysAgo % 5)) * 3600000).toISOString().replace('T', ' ').slice(0, 19);
       const size = { 1: 'small', 2: 'medium', 4: 'large' }[hours];
       const { lastInsertRowid } = db.prepare(`

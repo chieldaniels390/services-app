@@ -9,7 +9,8 @@ import { vehicleText } from '../../components/ProPhoto.jsx';
 const PAYMENT_LABELS = { pending: 'Not paid', paid: 'Paid', refund_pending: 'Refund pending', refunded: 'Refunded', failed: 'Failed', refund_failed: 'Refund failed' };
 // Same states as the pro sees, worded for an admin.
 const ADMIN_PAYOUT_LABELS = { ...PAYOUT_LABELS, awaiting_details: "Waiting for pro's bank details", processing: 'Transfer in progress', paid: 'Paid to pro' };
-const toCents = (rands) => Math.round(Number(String(rands).replace(',', '.')) * 100);
+// Whole rands, like every other amount in the app.
+const toCents = (rands) => Math.round(Number(String(rands).replace(',', '.').replace(/\s/g, ''))) * 100;
 
 function RefundForm({ jobId, refundableCents, onDone }) {
   const [amount, setAmount] = useState('');
@@ -38,9 +39,9 @@ function RefundForm({ jobId, refundableCents, onDone }) {
       <p className="muted small">Up to {money(refundableCents)} can be refunded. This doesn't change the pro's payout; to hold or cancel that, use a dispute.</p>
       <div className="row wrap">
         <label className="grow">Amount (R)
-          <input required inputMode="decimal" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} />
+          <input required inputMode="numeric" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value)} />
         </label>
-        <button type="button" className="btn" onClick={() => setAmount((refundableCents / 100).toFixed(2))}>Full amount</button>
+        <button type="button" className="btn" onClick={() => setAmount(String(Math.floor(refundableCents / 100)))}>Full amount</button>
       </div>
       <label>Reason (internal)
         <input required value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Pro arrived 2 hours late" />
@@ -78,7 +79,7 @@ function ResolveForm({ dispute, refundableCents, heldCents, onDone }) {
   return (
     <form onSubmit={submit} className="resolve-form">
       <label>Refund to customer (R, max {money(refundableCents)})
-        <input inputMode="decimal" value={refund} onChange={(e) => setRefund(e.target.value)} />
+        <input inputMode="numeric" value={refund} onChange={(e) => setRefund(e.target.value)} />
       </label>
       <fieldset>
         <legend>Pro's payout {heldCents > 0 ? `(${money(heldCents)} on hold)` : '(nothing on hold)'}</legend>

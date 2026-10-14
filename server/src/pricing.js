@@ -16,6 +16,9 @@ export function surgeMultiplier(openRequests, onlineProviders) {
   return Math.min(MAX_SURGE, Math.round(raw * 10) / 10);
 }
 
+/** Prices are shown and charged in whole rands. */
+export const toWholeRand = (cents) => Math.round(cents / 100) * 100;
+
 export function quote(category, size, surge = 1) {
   const { hours } = JOB_SIZES[size];
   const labourCents = category.hourly_cents * hours;
@@ -25,13 +28,13 @@ export function quote(category, size, surge = 1) {
     labourCents,
     hours,
     surge,
-    totalCents: Math.round(subtotalCents * surge),
+    totalCents: toWholeRand(subtotalCents * surge),
   };
 }
 
 /** Split the final bill: the platform fee applies to the quoted work, materials go straight to the pro. */
 export function settle(estimatedCents, materialsCents, feeRate) {
-  const platformFeeCents = Math.round(estimatedCents * feeRate);
+  const platformFeeCents = toWholeRand(estimatedCents * feeRate);
   const finalCents = estimatedCents + materialsCents;
   return { finalCents, platformFeeCents, payoutCents: finalCents - platformFeeCents };
 }

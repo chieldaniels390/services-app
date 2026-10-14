@@ -1,9 +1,15 @@
 import { toE164 } from './phone.js';
 
-/** "R1 000" / "R12.50". Plain ASCII, because one emoji or curly quote halves what fits in an SMS. */
+/** "R1 000": whole rands, space between thousands. Plain ASCII, because one emoji or curly quote halves what fits in an SMS. */
 export function rand(cents) {
-  const whole = Math.floor(cents / 100).toLocaleString('en-US').replace(/,/g, ' ');
-  return `R${whole}${cents % 100 ? `.${String(cents % 100).padStart(2, '0')}` : ''}`;
+  return `R${Math.round(cents / 100).toLocaleString('en-US').replace(/,/g, ' ')}`;
+}
+
+/** "R1 000" or "R130.43": for documents that must show exact amounts, such as VAT on a tax invoice. */
+export function randExact(cents) {
+  const whole = Math.floor(Math.abs(cents) / 100).toLocaleString('en-US').replace(/,/g, ' ');
+  const rest = Math.abs(cents) % 100;
+  return `${cents < 0 ? '-' : ''}R${whole}${rest ? `.${String(rest).padStart(2, '0')}` : ''}`;
 }
 const first = (name) => (name ?? '').split(' ')[0] || 'Your pro';
 

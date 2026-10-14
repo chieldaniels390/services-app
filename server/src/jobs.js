@@ -6,7 +6,7 @@ import { DISPUTE_REASONS, createDisputeService } from './disputes.js';
 import { createPaymentService } from './payments.js';
 import { createReviewService } from './reviews.js';
 import { isWithinHours } from './time.js';
-import { JOB_SIZES, quote, settle, surgeMultiplier } from './pricing.js';
+import { JOB_SIZES, quote, settle, surgeMultiplier, toWholeRand } from './pricing.js';
 
 export const ACTIVE_STATUSES = ['accepted', 'en_route', 'arrived', 'in_progress'];
 const ACTIVE_SQL = ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ');
@@ -372,7 +372,8 @@ export function createJobService({
 
   function listForUser(user) {
     const column = user.role === 'provider' ? 'provider_id' : 'customer_id';
-    return db.prepare(`${JOB_SELECT} WHERE j.${column} = ? ORDER BY j.id DESC LIMIT 100`)
+    // Most recent first: by when the job finished, or when it was booked if it hasn't yet.
+    return db.prepare(`${JOB_SELECT} WHERE j.${column} = ? ORDER BY COALESCE(j.completed_at, j.cancelled_at, j.created_at) DESC, j.id DESC LIMIT 100`)
       .all(user.id)
       .map((row) => toDto(row, user));
   }
@@ -443,6 +444,7 @@ export function createJobService({
       if (!Number.isInteger(materialsCents) || materialsCents < 0 || materialsCents > 1_000_000) {
         throw badRequest('Materials cost must be a non-negative amount');
       }
+      materialsCents = toWholeRand(materialsCents); // whole rands, like every other price
       const bill = settle(row.estimated_cents, materialsCents, feeRateOf(row));
       const { changes } = db.prepare(`
         UPDATE jobs SET status = 'completed', completed_at = datetime('now'), materials_cents = ?,
