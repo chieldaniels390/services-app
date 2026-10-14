@@ -19,6 +19,11 @@ export const config = {
   // Service radius for pros who haven't set their own service area (around their live location).
   dispatchRadiusKm: Number(process.env.DISPATCH_RADIUS_KM ?? 30),
   maxServiceRadiusKm: Number(process.env.MAX_SERVICE_RADIUS_KM ?? 100),
+  // "Book again": how long the chosen pro has the job to themselves before it goes to everyone.
+  preferredWindowMinutes: Number(process.env.PREFERRED_PRO_WINDOW_MINUTES ?? 5),
+  preferredWindowScheduledMinutes: Number(process.env.PREFERRED_PRO_WINDOW_SCHEDULED_MINUTES ?? 60),
+  // Repeat bookings: each visit is booked (and charged to the saved card) this long before it happens.
+  recurringLeadHours: Number(process.env.RECURRING_LEAD_HOURS ?? 48),
   // Working hours and "today / this week / this month" earnings use this time zone.
   timezone: process.env.TIMEZONE ?? 'Africa/Johannesburg',
   defaultCenter: {

@@ -82,7 +82,8 @@ if (!hasHistory) {
     [13, 1, 0], [15, 4, 0], [17, 2, 26000], [19, 1, 0], [22, 2, 0], [24, 1, 12000], [26, 4, 0], [29, 2, 0], [33, 1, 0],
   ]; // [days ago, hours, parts cents]
   transaction(db, () => {
-    for (const [daysAgo, hours, parts] of history) {
+    // Oldest first, so job numbers go up over time like real bookings.
+    for (const [daysAgo, hours, parts] of [...history].reverse()) {
       const estimated = callout + hourly * hours;
       const fee = Math.round(estimated * config.platformFeeRate);
       const done = new Date(Date.now() - daysAgo * 86400000 - (2 + (daysAgo % 5)) * 3600000).toISOString().replace('T', ' ').slice(0, 19);
@@ -95,6 +96,10 @@ if (!hasHistory) {
         .run(customer.id, plumber.id, size, lat, lng, estimated, parts, estimated + parts, fee, estimated - fee + parts,
           parts ? 'paid' : null, config.platformFeeRate, done, done, done, done);
       const jobId = Number(lastInsertRowid);
+      const payment = db.prepare(`INSERT INTO payments (job_id, kind, reference, amount_cents, status, paid_at, created_at)
+        VALUES (?, ?, ?, ?, 'paid', ?, ?)`);
+      payment.run(jobId, 'booking', `bk_demo_${jobId}`, estimated, done, done);
+      if (parts) payment.run(jobId, 'materials', `mt_demo_${jobId}`, parts, done, done);
       const payout = db.prepare(`INSERT INTO payouts (job_id, provider_id, kind, amount_cents, reference, status, paid_at, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
       // The most recent payout is still on its way, the rest have landed.

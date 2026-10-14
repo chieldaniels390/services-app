@@ -55,6 +55,13 @@ export function coversJob(profile, point, at) {
 export function createJobService({
   db, notify, paystack, notifyAdmins = () => {}, notifier = silentNotifier, now = () => new Date(),
 }) {
+  const fromSql = (v) => new Date(`${v.replace(' ', 'T')}Z`);
+  const toSql = (d) => d.toISOString().replace('T', ' ').slice(0, 19);
+
+  /** Is a "book again" job still reserved for the customer's chosen pro? */
+  const reservedFor = (row) => (row.preferred_provider_id && !row.preferred_released && row.preferred_until
+    && fromSql(row.preferred_until) > now() ? row.preferred_provider_id : null);
+
   // Scheduled jobs are matched against the pro's hours at the booked time, not when the request was made.
   const jobTime = (row) => (row.scheduled_for ? new Date(row.scheduled_for) : now());
   const payments = createPaymentService({
@@ -163,6 +170,15 @@ export function createJobService({
     }
     if (isProvider) {
       dto.payoutCents = row.payout_cents ?? settle(row.estimated_cents, 0, feeRateOf(row)).payoutCents;
+      dto.askedForYou = row.preferred_provider_id === viewer.id && !row.preferred_released;
+    }
+    if (involved && row.preferred_provider_id) {
+      const name = db.prepare('SELECT name FROM users WHERE id = ?').get(row.preferred_provider_id)?.name;
+      dto.preferredProvider = { id: row.preferred_provider_id, name, reservedUntil: reservedFor(row) ? row.preferred_until : null };
+    }
+    if (involved) {
+      dto.recurringId = row.recurring_id;
+      dto.hasInvoice = row.status === 'completed' && row.payment_status !== 'unpaid';
     }
     if (isProvider && viewer.id === row.provider_id) {
       dto.payouts = db.prepare(`
@@ -218,20 +234,75 @@ export function createJobService({
     };
   }
 
+  function offer(row, p, type = 'new_offer') {
+    const dto = toDto(row, { id: p.id, role: 'provider' });
+    notify(p.id, 'job:offer', { ...dto, distanceKm: round1(p.distanceKm), etaMinutes: etaMinutes(p.distanceKm) });
+    notifier.notify(p.id, type, { job: row, distanceKm: round1(p.distanceKm), payoutCents: dto.payoutCents });
+  }
+
+  /**
+   * Offers a requested job to pros. A "book again" job goes to the chosen pro alone first (if they're
+   * available); everyone else gets it when the window ends (releaseExpiredPreferences) or straight away
+   * if the chosen pro can't take it.
+   */
   function dispatch(row) {
     const offered = availableProviders(row.category_id, row, jobTime(row));
-    for (const p of offered) {
-      const dto = toDto(row, { id: p.id, role: 'provider' });
-      notify(p.id, 'job:offer', { ...dto, distanceKm: round1(p.distanceKm), etaMinutes: etaMinutes(p.distanceKm) });
-      notifier.notify(p.id, 'new_offer', { job: row, distanceKm: round1(p.distanceKm), payoutCents: dto.payoutCents });
+    if (row.preferred_provider_id && !row.preferred_released) {
+      const chosen = offered.find((p) => p.id === row.preferred_provider_id);
+      if (chosen) {
+        const minutes = row.scheduled_for ? config.preferredWindowScheduledMinutes : config.preferredWindowMinutes;
+        db.prepare('UPDATE jobs SET preferred_until = ? WHERE id = ?').run(toSql(new Date(now().getTime() + minutes * 60000)), row.id);
+        offer(getJobRow(row.id), chosen, 'rebook_offer');
+        return 1;
+      }
+      db.prepare('UPDATE jobs SET preferred_released = 1 WHERE id = ?').run(row.id);
+      notifier.notify(row.customer_id, 'preferred_unavailable', { job: row });
     }
+    for (const p of offered) offer(row, p);
     return offered.length;
   }
 
+  /** Sends "book again" jobs to everyone once the chosen pro's window has passed. Run periodically. */
+  function releaseExpiredPreferences() {
+    const due = db.prepare(`
+      SELECT id FROM jobs WHERE status = 'requested' AND preferred_provider_id IS NOT NULL AND preferred_released = 0
+        AND preferred_until IS NOT NULL AND preferred_until <= ?`).all(toSql(now()));
+    for (const { id } of due) {
+      const { changes } = db.prepare('UPDATE jobs SET preferred_released = 1 WHERE id = ? AND preferred_released = 0').run(id);
+      if (!changes) continue;
+      const row = getJobRow(id);
+      notifier.notify(row.customer_id, 'preferred_unavailable', { job: row });
+      dispatch(row);
+    }
+    return due.length;
+  }
+
+  /** The pro a customer wants to rebook: someone who has completed a job for them and offers this trade. */
+  function checkPreferred(customerId, providerId, categoryId) {
+    const pro = db.prepare(`
+      SELECT u.id, u.name FROM users u WHERE u.id = ? AND u.role = 'provider'
+        AND EXISTS (SELECT 1 FROM jobs j WHERE j.customer_id = ? AND j.provider_id = u.id AND j.status = 'completed')`)
+      .get(providerId, customerId);
+    if (!pro) throw badRequest('You can only rebook pros who have done a job for you');
+    if (!offersCategory(providerId, categoryId)) throw badRequest(`${pro.name.split(' ')[0]} doesn't offer this service`);
+    return pro;
+  }
+
+  /** For the booking form: is the chosen pro available for this job right now (or at the booked time)? */
+  function preferredInfo(customer, { preferredProviderId, categoryId, lat, lng, scheduledFor }) {
+    const pro = checkPreferred(customer.id, Number(preferredProviderId), categoryId);
+    const at = scheduledFor && !Number.isNaN(Date.parse(scheduledFor)) ? new Date(scheduledFor) : now();
+    return { id: pro.id, name: pro.name, available: availableProviders(categoryId, { lat, lng }, at).some((p) => p.id === pro.id) };
+  }
+
   /** Creates the job unpaid and returns a Paystack checkout link. Pros only see it once payment clears. */
-  async function create(customer, input) {
+  async function create(customer, input, { recurringId = null } = {}) {
     const { categoryId, size, description, address, lat, lng, scheduledFor } = input;
-    const est = estimate({ categoryId, size, lat, lng });
+    // Repeat visits are charged automatically, so they always use the standard rate, never busy-time pricing.
+    const est = recurringId
+      ? { ...estimate({ categoryId, size, lat, lng, scheduledFor }), ...quote(getCategory(categoryId), size, 1) }
+      : estimate({ categoryId, size, lat, lng, scheduledFor });
+    const preferred = input.preferredProviderId ? checkPreferred(customer.id, Number(input.preferredProviderId), categoryId) : null;
     if (!description?.trim()) throw badRequest('Describe the problem so pros know what to bring');
     if (!address?.trim()) throw badRequest('Address is required');
     if (scheduledFor && Number.isNaN(Date.parse(scheduledFor))) throw badRequest('Invalid scheduled time');
@@ -240,11 +311,17 @@ export function createJobService({
 
     const { lastInsertRowid } = db.prepare(`
       INSERT INTO jobs (customer_id, category_id, description, size, address, lat, lng, scheduled_for, surge, estimated_cents,
-        status, fee_rate)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_payment', ?)`)
+        status, fee_rate, preferred_provider_id, recurring_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_payment', ?, ?, ?)`)
       .run(customer.id, categoryId, description.trim().slice(0, 1000), size, address.trim().slice(0, 300),
-        lat, lng, scheduledFor ? new Date(scheduledFor).toISOString() : null, est.surge, est.totalCents, config.platformFeeRate);
+        lat, lng, scheduledFor ? new Date(scheduledFor).toISOString() : null, est.surge, est.totalCents, config.platformFeeRate,
+        preferred?.id ?? null, recurringId);
     const id = Number(lastInsertRowid);
+    if (input.payWithSavedCard) {
+      // Repeat bookings: charge the saved card. If that fails the job waits for the customer to pay.
+      const paid = await payments.payBookingWithSavedCard(id);
+      return { job: toDto(getJobRow(id), customer), paid };
+    }
     let payment;
     try {
       payment = await payments.startBooking(id);
@@ -314,6 +391,7 @@ export function createJobService({
       ORDER BY j.id DESC`)
       .all(provider.id, provider.id)
       .filter((row) => coversJob(profile, row, jobTime(row)))
+      .filter((row) => !reservedFor(row) || reservedFor(row) === provider.id)
       .map((row) => ({ row, km: distanceKm(profile, row) }))
       .sort((a, b) => a.km - b.km)
       .map(({ row, km }) => ({ ...toDto(row, provider), distanceKm: round1(km), etaMinutes: etaMinutes(km) }));
@@ -332,6 +410,8 @@ export function createJobService({
     if (row.customer_id === provider.id) throw forbidden();
     const busy = db.prepare(`SELECT 1 FROM jobs WHERE provider_id = ? AND status IN (${ACTIVE_SQL})`).get(provider.id);
     if (busy) throw conflict('Finish your current job before accepting another');
+    const reserved = reservedFor(row);
+    if (reserved && reserved !== provider.id) throw conflict('The customer asked for another pro first. It may come back to you in a few minutes.');
 
     // Conditional update makes "first pro to tap accept wins" atomic.
     const { changes } = db.prepare(`
@@ -398,7 +478,8 @@ export function createJobService({
     if (user.id === row.provider_id) {
       if (!['accepted', 'en_route'].includes(row.status)) throw conflict('This job can no longer be cancelled');
       // A pro dropping out puts the job back on the market rather than failing the customer.
-      db.prepare(`UPDATE jobs SET status = 'requested', provider_id = NULL, accepted_at = NULL WHERE id = ?`).run(id);
+      // Back to everyone, including if they were the pro the customer asked for.
+      db.prepare(`UPDATE jobs SET status = 'requested', provider_id = NULL, accepted_at = NULL, preferred_released = 1 WHERE id = ?`).run(id);
       notify(row.provider_id, 'job:released', { id });
       const requeued = getJobRow(id);
       notifyParties(requeued);
@@ -462,7 +543,7 @@ export function createJobService({
   return {
     estimate, create, listForUser, getForUser, openRequestsFor, accept, advance, cancel, rate,
     messages, sendMessage, relayLocation, payBooking, confirmPayment, payMaterials, payments,
-    disputes, toDto, getJobRow, JOB_SELECT,
+    disputes, toDto, getJobRow, JOB_SELECT, releaseExpiredPreferences, preferredInfo, checkPreferred,
   };
 }
 

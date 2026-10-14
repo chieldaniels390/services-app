@@ -53,6 +53,20 @@ export async function apiUpload(path, file) {
 export async function apiBlob(path) {
   const token = getToken();
   const res = await fetch(`/api${path}`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
-  if (!res.ok) throw new Error(`Could not load file (${res.status})`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error ?? `Could not load file (${res.status})`);
+  }
   return res.blob();
+}
+
+/** Downloads a protected file (e.g. an invoice PDF) and saves it with the given name. */
+export async function downloadFile(path, fileName) {
+  const blob = await apiBlob(path);
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement('a'), { href: url, download: fileName });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../api.js';
 import AddressSearch from '../components/AddressSearch.jsx';
 import MapView from '../components/MapView.jsx';
-import { ACTIVE_STATUSES, STATUS_LABELS, distanceKm, goToCheckout, money } from '../format.js';
+import { ACTIVE_STATUSES, STATUS_LABELS, distanceKm, goToCheckout, money, zonedInputToIso } from '../format.js';
 import { useSession, useSocketEvent } from '../session.jsx';
 
 export default function CustomerHome() {
@@ -20,7 +20,38 @@ export default function CustomerHome() {
   const [activeJobs, setActiveJobs] = useState([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [frequency, setFrequency] = useState('weekly');
+  const [preferredPro, setPreferredPro] = useState(null); // { id, name } when booking a specific pro again
+  const [params, setParams] = useSearchParams();
   const category = categories.find((c) => c.id === categoryId);
+  // "Repeat" and "Schedule" both pick a date and time; repeat uses it as the first visit.
+  const pickedTime = timing !== 'now' && scheduledFor ? zonedInputToIso(scheduledFor) : undefined;
+
+  // Prefill from "Book again" (?rebook=<job>) or a favourite pro (?pro=<id>&category=<trade>).
+  useEffect(() => {
+    const rebook = params.get('rebook');
+    const pro = params.get('pro');
+    if (!rebook && !pro) return;
+    setParams({}, { replace: true });
+    if (rebook) {
+      api(`/jobs/${rebook}`).then((job) => {
+        setCategoryId(job.category.id);
+        setSize(job.size);
+        setDescription(job.description);
+        setAddress(job.address);
+        setLocation(job.location);
+        setFocus(job.location);
+        if (job.provider) setPreferredPro({ id: job.provider.id, name: job.provider.name });
+      }).catch((e) => setError(e.message));
+    } else {
+      api('/favourites').then((list) => {
+        const fav = list.find((f) => f.id === Number(pro));
+        if (fav) setPreferredPro({ id: fav.id, name: fav.name });
+        setCategoryId(params.get('category') ?? fav?.categories[0] ?? null);
+      }).catch((e) => setError(e.message));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const loadActive = () => api('/jobs').then((jobs) => setActiveJobs(jobs.filter((j) => ACTIVE_STATUSES.includes(j.status))));
   useEffect(() => { loadActive().catch(() => {}); }, []);
@@ -30,13 +61,13 @@ export default function CustomerHome() {
     if (!categoryId) return undefined;
     const t = setTimeout(() => {
       // Pros are matched on their working hours at the booked time, so a scheduled quote checks that time.
-      const at = timing === 'later' && scheduledFor ? new Date(scheduledFor).toISOString() : undefined;
-      api('/estimate', { method: 'POST', body: { categoryId, size, ...location, scheduledFor: at } })
-        .then(setEstimate)
+      api('/estimate', { method: 'POST', body: { categoryId, size, ...location, scheduledFor: pickedTime, preferredProviderId: preferredPro?.id } })
+        .then((est) => { setEstimate(est); setError(''); })
         .catch((e) => setError(e.message));
     }, 250);
     return () => clearTimeout(t);
-  }, [categoryId, size, location, timing, scheduledFor]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [categoryId, size, location, timing, scheduledFor, preferredPro]);
 
   // Latest reverse lookup wins, so quick successive taps can't leave a stale address behind.
   const lookup = useRef(0);
@@ -73,13 +104,10 @@ export default function CustomerHome() {
     setBusy(true);
     setError('');
     try {
-      const { payment } = await api('/jobs', {
-        method: 'POST',
-        body: {
-          categoryId, size, description, address, ...location,
-          scheduledFor: timing === 'later' && scheduledFor ? new Date(scheduledFor).toISOString() : undefined,
-        },
-      });
+      const details = { categoryId, size, description, address, ...location, preferredProviderId: preferredPro?.id };
+      const { payment } = timing === 'repeat'
+        ? await api('/recurring', { method: 'POST', body: { ...details, frequency, firstVisitAt: pickedTime } })
+        : await api('/jobs', { method: 'POST', body: { ...details, scheduledFor: pickedTime } });
       goToCheckout(payment.authorizationUrl);
     } catch (err) {
       setError(err.message);
@@ -154,11 +182,39 @@ export default function CustomerHome() {
               <div className="segmented">
                 <button type="button" className={timing === 'now' ? 'on' : ''} onClick={() => setTiming('now')}>ASAP</button>
                 <button type="button" className={timing === 'later' ? 'on' : ''} onClick={() => setTiming('later')}>Schedule</button>
+                <button type="button" className={timing === 'repeat' ? 'on' : ''} onClick={() => setTiming('repeat')}>Repeat</button>
               </div>
-              {timing === 'later' && (
-                <input type="datetime-local" required value={scheduledFor} onChange={(e) => setScheduledFor(e.target.value)} />
+              {timing === 'repeat' && (
+                <div className="segmented">
+                  <button type="button" className={frequency === 'weekly' ? 'on' : ''} onClick={() => setFrequency('weekly')}>Every week</button>
+                  <button type="button" className={frequency === 'monthly' ? 'on' : ''} onClick={() => setFrequency('monthly')}>Every month</button>
+                </div>
+              )}
+              {timing !== 'now' && (
+                <label className="sub-label">
+                  {timing === 'repeat' ? 'First visit' : 'Date and time'} <span className="muted small">(South African time)</span>
+                  <input type="datetime-local" required value={scheduledFor} onChange={(e) => setScheduledFor(e.target.value)} />
+                </label>
+              )}
+              {timing === 'repeat' && (
+                <p className="hint">
+                  You pay for the first visit now. Each later visit is booked {Math.round(config.recurringLeadHours / 24)} days ahead and charged to the same card at the standard rate.
+                  You can skip, pause or stop it any time under My bookings.
+                </p>
               )}
             </div>
+
+            {preferredPro && (
+              <div className="preferred">
+                <span className="grow">
+                  <strong>Booking {preferredPro.name} again.</strong>{' '}
+                  {estimate?.preferred && !estimate.preferred.available
+                    ? `${preferredPro.name.split(' ')[0]} isn't available ${timing === 'now' ? 'right now' : 'at that time'}, so your request will go to other trusted pros.`
+                    : `${preferredPro.name.split(' ')[0]} gets it first. If they can't take it within a few minutes, it goes to other pros.`}
+                </span>
+                <button type="button" className="link" aria-label="Book any pro instead" onClick={() => setPreferredPro(null)}>✕</button>
+              </div>
+            )}
 
             {estimate && (
               <div className="quote">
@@ -182,7 +238,7 @@ export default function CustomerHome() {
 
             {error && <p className="error">{error}</p>}
             <button className="btn primary lg block" disabled={busy || !estimate || !config.payments.enabled}>
-              {busy ? 'Opening secure checkout…' : `Pay & request${estimate ? ` · ${money(estimate.totalCents)}` : ''}`}
+              {busy ? 'Opening secure checkout…' : `${timing === 'repeat' ? 'Pay first visit & set up' : 'Pay & request'}${estimate ? ` · ${money(estimate.totalCents)}` : ''}`}
             </button>
             <p className="hint center">
               🔒 Paid securely with Paystack. We hold your payment until the job is done, and you get a full refund if you cancel before work starts.

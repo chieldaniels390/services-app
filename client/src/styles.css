@@ -468,3 +468,30 @@ label.radio input { width: auto; }
 .job-earnings li:first-child { border-top: none; }
 .job-earnings a { font-weight: 600; text-decoration: none; }
 .job-earnings .right { display: flex; flex-direction: column; align-items: flex-end; gap: 0.25rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* Bookings history, favourites, repeat bookings */
+.sub-tabs { margin-bottom: 0.25rem; }
+.sub-tabs button { padding: 0.6rem 0.9rem; background: none; border: none; border-bottom: 3px solid transparent; color: var(--muted); font: inherit; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.sub-tabs button.active { color: var(--text); border-bottom-color: var(--brand); }
+.booking { display: flex; flex-direction: column; gap: 0.6rem; }
+.booking-main { display: flex; gap: 0.75rem; align-items: flex-start; text-decoration: none; color: var(--text); }
+.booking-main .right { display: flex; flex-direction: column; align-items: flex-end; gap: 0.25rem; white-space: nowrap; }
+.booking-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.booking-actions .btn { padding: 0.45rem 0.8rem; font-size: 0.9rem; }
+.clamp { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+.block-line { flex-basis: 100%; }
+.pill.repeat-pill { margin-left: 0.4rem; }
+.pill.asked { margin-left: 0.4rem; background: #fde68a; color: #78350f; }
+.btn.fav { color: #be123c; }
+.btn.fav.on { background: color-mix(in srgb, #be123c 10%, transparent); border-color: color-mix(in srgb, #be123c 40%, transparent); }
+.btn.fav.compact { padding: 0.35rem 0.6rem; font-size: 1.1rem; }
+.fav-card { display: flex; flex-direction: column; gap: 0.6rem; }
+.repeat { display: flex; flex-direction: column; gap: 0.5rem; }
+.repeat.paused { opacity: 0.75; }
+.upcoming a { margin-left: 0.5rem; }
+.upcoming a.needs-pay { color: var(--danger); font-weight: 700; }
+.preferred { display: flex; gap: 0.5rem; align-items: flex-start; background: var(--brand-soft); border-radius: 12px; padding: 0.65rem 0.8rem; margin-bottom: 1rem; font-size: 0.9rem; }
+.sub-label { margin: 0.5rem 0 0; font-weight: 600; }
+.field .segmented + .segmented { margin-top: 0.4rem; }
+.settings-form { max-width: 720px; margin: 0 auto; }
+.settings-form .setting { border-top: none; padding-top: 0; }

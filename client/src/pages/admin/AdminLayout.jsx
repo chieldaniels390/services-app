@@ -8,6 +8,7 @@ import AdminJobs from './AdminJobs.jsx';
 import AdminOverview from './AdminOverview.jsx';
 import AdminPro from './AdminPro.jsx';
 import AdminPros from './AdminPros.jsx';
+import AdminSettings from './AdminSettings.jsx';
 
 export default function AdminLayout() {
   const [overview, setOverview] = useState(null);
@@ -24,6 +25,7 @@ export default function AdminLayout() {
         <NavLink to="/admin/pros">Pros {count(overview?.pendingVerifications)}</NavLink>
         <NavLink to="/admin/jobs">Jobs</NavLink>
         <NavLink to="/admin/disputes">Disputes {count(overview?.openDisputes)}</NavLink>
+        <NavLink to="/admin/settings">Settings</NavLink>
       </nav>
       <Routes>
         <Route index element={<AdminOverview overview={overview} />} />
@@ -32,6 +34,7 @@ export default function AdminLayout() {
         <Route path="jobs" element={<AdminJobs />} />
         <Route path="jobs/:id" element={<AdminJob onChange={refresh} />} />
         <Route path="disputes" element={<AdminDisputes />} />
+        <Route path="settings" element={<AdminSettings />} />
         <Route path="*" element={<Navigate to="/admin" replace />} />
       </Routes>
     </div>

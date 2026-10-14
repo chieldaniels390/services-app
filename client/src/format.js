@@ -31,14 +31,35 @@ export const etaMinutes = (km) => Math.max(1, Math.round((km / 30) * 60));
 // SQLite datetime('now') is UTC without a zone marker.
 const parse = (value) => new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(value) ? value : `${value.replace(' ', 'T')}Z`);
 
+// Jobs happen in the marketplace's time zone, so every date and time is shown (and entered) in it,
+// whatever time zone the viewer's device is set to.
+let timeZone = 'Africa/Johannesburg';
+export const setTimeZone = (tz) => { timeZone = tz; };
+
 export function when(value) {
   if (!value) return '';
-  return parse(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  return parse(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short', timeZone });
 }
 
 export function timeOnly(value) {
   if (!value) return '';
-  return parse(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return parse(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone });
+}
+
+/** A datetime-local value ("2026-10-19T09:00") read as wall-clock time in the marketplace time zone, as ISO UTC. */
+export function zonedInputToIso(value) {
+  const [date, time] = value.split('T');
+  const [y, m, d] = date.split('-').map(Number);
+  const [hh, mm] = time.split(':').map(Number);
+  const wanted = Date.UTC(y, m - 1, d, hh, mm);
+  let guess = wanted;
+  for (let i = 0; i < 2; i++) {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+      timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(new Date(guess)).map(({ type, value: v }) => [type, Number(v)]));
+    guess += wanted - Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
+  }
+  return new Date(guess).toISOString();
 }
 
 export const STATUS_LABELS = {
@@ -74,5 +95,5 @@ export function ago(value) {
   if (seconds < 60) return 'just now';
   if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
-  return parse(value).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  return parse(value).toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone });
 }

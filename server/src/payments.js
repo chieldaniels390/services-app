@@ -173,30 +173,50 @@ export function createPaymentService({
     onJobChanged(payment.job_id);
   }
 
-  /** Parts the pro added at completion: charge the card saved at booking, or fall back to a checkout link. */
+  /**
+   * Charges a card the customer saved on an earlier payment. Returns true once the payment is confirmed;
+   * false if there's no saved card or the charge didn't go through (the caller then offers checkout).
+   */
+  async function chargeSavedCard(job, kind, amountCents, authorizationCode) {
+    if (!authorizationCode) return false;
+    const reference = newReference(kind === 'booking' ? 'bk' : 'mt', job.id);
+    db.prepare('INSERT INTO payments (job_id, kind, reference, amount_cents) VALUES (?, ?, ?, ?)').run(job.id, kind, reference, amountCents);
+    try {
+      const data = await paystack.chargeAuthorization({
+        email: job.customer_email, amountCents, authorizationCode, reference, metadata: { jobId: job.id, kind },
+      });
+      if (data.status !== 'success') return false;
+      await confirm(reference);
+      return getPayment(reference).status === 'paid';
+    } catch (err) {
+      console.warn(`Saved-card charge failed for job ${job.id}:`, err.message);
+      return false;
+    }
+  }
+
+  /** The customer's most recent reusable card, from any of their jobs. */
+  const savedCardOf = (customerId) => db.prepare(`
+    SELECT p.authorization_code FROM payments p JOIN jobs j ON j.id = p.job_id
+    WHERE j.customer_id = ? AND p.authorization_code IS NOT NULL ORDER BY p.id DESC`).get(customerId)?.authorization_code;
+
+  /** Parts the pro added at completion: charge the card used for the booking, or fall back to a checkout link. */
   async function payMaterials(jobId) {
     const job = getJob(jobId);
     if (job.materials_status !== 'unpaid') throw conflict('There is nothing left to pay on this job');
     const saved = db.prepare(`
       SELECT authorization_code FROM payments
       WHERE job_id = ? AND kind = 'booking' AND authorization_code IS NOT NULL ORDER BY id DESC`).get(jobId);
-    if (saved) {
-      const reference = newReference('mt', jobId);
-      db.prepare("INSERT INTO payments (job_id, kind, reference, amount_cents) VALUES (?, 'materials', ?, ?)").run(jobId, reference, job.materials_cents);
-      try {
-        const data = await paystack.chargeAuthorization({
-          email: job.customer_email, amountCents: job.materials_cents, authorizationCode: saved.authorization_code, reference,
-          metadata: { jobId, kind: 'materials' },
-        });
-        if (data.status === 'success') {
-          await confirm(reference);
-          if (getJob(jobId).materials_status === 'paid') return { status: 'paid' };
-        }
-      } catch (err) {
-        console.warn(`Saved-card charge failed for job ${jobId}, falling back to checkout:`, err.message);
-      }
+    if (await chargeSavedCard(job, 'materials', job.materials_cents, saved?.authorization_code) && getJob(jobId).materials_status === 'paid') {
+      return { status: 'paid' };
     }
     return checkout(job, 'materials', job.materials_cents);
+  }
+
+  /** Repeat bookings: pay for a visit with the customer's saved card. True if the job is now paid. */
+  async function payBookingWithSavedCard(jobId) {
+    const job = getJob(jobId);
+    const ok = await chargeSavedCard(job, 'booking', job.estimated_cents, savedCardOf(job.customer_id));
+    return ok && getJob(jobId).payment_status === 'paid';
   }
 
   // --- Payouts ---------------------------------------------------------
@@ -334,7 +354,7 @@ export function createPaymentService({
     configured: paystack.configured,
     testMode: paystack.testMode,
     isValidSignature: paystack.isValidSignature,
-    startBooking, checkout, confirm, refundBooking, refundJob, refundProcessed, payMaterials,
+    startBooking, checkout, confirm, refundBooking, payBookingWithSavedCard, savedCardOf, refundJob, refundProcessed, payMaterials,
     createPayout, holdPayouts, settleHeldPayouts, retryPayouts, transferEvent, payoutsFor, banks, setPayoutAccount,
     getPayment,
   };

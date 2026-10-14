@@ -19,6 +19,9 @@ import { toE164 } from './phone.js';
 import { createProviderService } from './providers.js';
 import { createPushService } from './push.js';
 import { createEarningsService } from './earnings.js';
+import { createBookingService } from './bookings.js';
+import { createInvoiceService, render as renderInvoice } from './invoices.js';
+import { createPlatformSettings } from './platform.js';
 import { createSmsProvider } from './sms/index.js';
 import { DOCUMENT_KINDS, MAX_DOCUMENT_BYTES, createVerificationService } from './verification.js';
 import { JOB_SIZES } from './pricing.js';
@@ -33,6 +36,8 @@ export function createApp({
   smsProvider = createSmsProvider(config.sms.provider),
   pushOptions = {},
   now = () => new Date(),
+  // How often to book due repeat visits and release "book again" jobs; 0 turns it off (tests drive it directly).
+  schedulerIntervalMs = 60_000,
 }) {
   const app = express();
   const server = createServer(app);
@@ -48,6 +53,20 @@ export function createApp({
   const jobs = createJobService({ db, notify, paystack, notifyAdmins, notifier, now });
   const providers = createProviderService({ db, notify, notifyAdmins, notifier, now });
   const earnings = createEarningsService({ db, now });
+  const platform = createPlatformSettings({ db });
+  const invoices = createInvoiceService({ db, platform });
+  const bookings = createBookingService({ db, jobs, notifier, now });
+
+  async function runScheduler() {
+    jobs.releaseExpiredPreferences();
+    await bookings.runDue();
+  }
+  if (schedulerIntervalMs > 0) {
+    const timer = setInterval(() => runScheduler().catch((err) => console.error('Scheduler failed:', err)), schedulerIntervalMs);
+    timer.unref();
+    server.on('close', () => clearInterval(timer));
+    setTimeout(() => runScheduler().catch((err) => console.error('Scheduler failed:', err)), 1000).unref();
+  }
   const { payments, disputes } = jobs;
   const verification = createVerificationService({ db, uploadDir, notify, notifyAdmins, notifier });
   const admin = createAdminService({ db, jobs, verification });
@@ -146,6 +165,8 @@ export function createApp({
     push: { publicKey: push.publicKey },
     map: config.map,
     defaultRadiusKm: config.dispatchRadiusKm,
+    recurringLeadHours: config.recurringLeadHours,
+    timezone: config.timezone,
     sms: { enabled: Boolean(smsProvider) },
   }));
 
@@ -254,7 +275,11 @@ export function createApp({
   // --- Customers --------------------------------------------------------
 
   api.post('/estimate', auth(), (req, res) => {
-    res.json(jobs.estimate({ ...req.body, ...point(req.body) }));
+    const est = jobs.estimate({ ...req.body, ...point(req.body) });
+    if (req.body?.preferredProviderId && req.user.role === 'customer') {
+      est.preferred = jobs.preferredInfo(req.user, { ...req.body, ...point(req.body) });
+    }
+    res.json(est);
   });
 
   api.post('/jobs', auth('customer'), async (req, res) => {
@@ -267,6 +292,27 @@ export function createApp({
   api.post('/jobs/:id/materials/payment', auth('customer'), async (req, res) => res.json(await jobs.payMaterials(req.user, jobId(req))));
 
   api.get('/jobs', auth(), (req, res) => res.json(jobs.listForUser(req.user)));
+
+  // --- Invoices, favourites and repeat bookings ------------------------------
+
+  api.get('/jobs/:id/invoice', auth(), (req, res) => res.json(invoices.forViewer(req.user, jobId(req))));
+  api.get('/jobs/:id/invoice.pdf', auth(), async (req, res) => {
+    const invoice = invoices.forViewer(req.user, jobId(req));
+    const pdf = await renderInvoice(invoice);
+    res.set({
+      'content-type': 'application/pdf',
+      'content-disposition': `attachment; filename="${invoice.number}.pdf"`,
+      'cache-control': 'private, no-store',
+    });
+    res.send(pdf);
+  });
+  api.get('/favourites', auth('customer'), (req, res) => res.json(bookings.listFavourites(req.user)));
+  api.put('/favourites/:id', auth('customer'), (req, res) => res.json(bookings.addFavourite(req.user, jobId(req))));
+  api.delete('/favourites/:id', auth('customer'), (req, res) => res.json(bookings.removeFavourite(req.user, jobId(req))));
+  api.get('/recurring', auth('customer'), (req, res) => res.json(bookings.listRecurring(req.user)));
+  api.post('/recurring', auth('customer'), async (req, res) => res.status(201).json(await bookings.createRecurring(req.user, req.body ?? {})));
+  api.patch('/recurring/:id', auth('customer'), (req, res) => res.json(bookings.setRecurringStatus(req.user, jobId(req), req.body?.status)));
+  api.post('/recurring/:id/skip', auth('customer'), (req, res) => res.json(bookings.skipNext(req.user, jobId(req))));
   api.get('/jobs/:id', auth(), (req, res) => res.json(jobs.getForUser(req.user, jobId(req))));
   api.post('/jobs/:id/cancel', auth(), async (req, res) => res.json(await jobs.cancel(req.user, jobId(req))));
   api.post('/jobs/:id/rate', auth('customer'), (req, res) => res.json(jobs.rate(req.user, jobId(req), req.body ?? {})));
@@ -361,6 +407,8 @@ export function createApp({
   };
 
   adminApi.get('/overview', (_req, res) => res.json(admin.overview()));
+  adminApi.get('/settings', (_req, res) => res.json(platform.get()));
+  adminApi.put('/settings', (req, res) => res.json(platform.update(req.body ?? {})));
   adminApi.get('/providers', (req, res) => res.json(admin.listProviders({ status: req.query.status, q: req.query.q })));
   adminApi.get('/providers/:id', (req, res) => res.json(admin.providerDetail(idParam(req))));
   adminApi.post('/providers/:id/verification', (req, res) => {
@@ -430,5 +478,5 @@ export function createApp({
     });
   });
 
-  return { app, server, io, notifier };
+  return { app, server, io, notifier, runScheduler };
 }

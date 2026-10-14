@@ -188,6 +188,7 @@ export default function ProviderHome() {
               <span className="icon">{j.category.icon}</span>
               <div className="grow">
                 <strong>{j.category.name}</strong> <span className="muted small">· {j.sizeLabel}</span>
+                {j.askedForYou && <span className="pill asked">⭐ Asked for you</span>}
                 <div className="muted small">
                   {j.distanceKm} km · ~{j.etaMinutes} min away{j.scheduledFor ? ` · ${when(j.scheduledFor)}` : ' · ASAP'}
                 </div>

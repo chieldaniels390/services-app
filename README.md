@@ -22,7 +22,8 @@ Customers get an upfront price and pay by card through **Paystack** when they bo
 - Approve and pay for any parts the pro added (charged to the saved card, or via a new checkout)
 - Report a problem (dispute) once the pro has arrived, up to 14 days after the job
 - See a **Verified** badge on their pro
-- Rate and review afterwards; booking history
+- Rate and review afterwards
+- **My bookings:** job history with filters, downloadable **PDF invoices** (tax invoices with VAT when switched on), **Book again** (the same pro gets first refusal), **favourite pros**, and **repeat bookings** (weekly or monthly, e.g. garden or pool service) with skip, pause and stop
 
 **Pros**
 - Sign up with the services you offer, then **get verified**: upload an ID, a trade certificate or licence, and a selfie. Only approved pros can go online, receive requests or accept jobs
@@ -85,6 +86,34 @@ The same rules decide the customer's "N pros nearby" count, and the pro's reques
 | ![](docs/screenshots/work-settings.png) | ![](docs/screenshots/earnings.png) |
 
 Earnings are what the pro actually receives: their payouts, excluding any an admin cancelled in a dispute. Parts count once the customer has paid for them. "This week" starts on Monday.
+
+## Bookings, invoices and repeat visits
+
+| My bookings | Repeat booking | Tax invoice (PDF) |
+| --- | --- | --- |
+| ![](docs/screenshots/bookings.png) | ![](docs/screenshots/repeat-booking.png) | ![](docs/screenshots/invoice.png) |
+
+**Invoices.** Customers download a PDF invoice for any completed, paid job, from My bookings or the job page. Admins can download it from the admin job page.
+- The first download issues it: it gets a sequential number (`INV-2026-00042`) and its contents are frozen. Later changes (VAT switched on, business details edited, a later refund) never alter an invoice that was already issued.
+- Refunds made before the invoice was issued appear on it.
+- Admin → Settings holds the business name, address, registration number and footer, and the **VAT switch**:
+  - With VAT on, invoices are titled *Tax invoice* and show your VAT number and "Includes VAT at 15%".
+  - Customer prices already include VAT (as South African consumer prices must), so turning VAT on doesn't change what anyone pays.
+  - VAT can't be turned on without a valid VAT number.
+
+**Book again and favourites.** Customers can rebook or save (♡) any pro who has completed a job for them. Booking again (from a past job or the favourites list) prefills the job.
+- The chosen pro is offered it alone first and sees "⭐ Asked for you". They have 5 minutes for an ASAP job and an hour for a scheduled one (`PREFERRED_PRO_WINDOW_MINUTES`, `PREFERRED_PRO_WINDOW_SCHEDULED_MINUTES`).
+- After that, or straight away if the pro is offline, off shift or out of range, the job goes to everyone as normal, and the customer is told.
+
+**Repeat bookings.** On the booking form, choose *Repeat*, then *Every week* or *Every month*, and the first visit.
+- The first visit is paid through checkout, which saves the card.
+- Each later visit is created `RECURRING_LEAD_HOURS` (48) ahead as a normal scheduled job. It's charged to the saved card at the standard rate (never busy-time pricing) and goes to the same pro first if one was chosen.
+- If the card is declined, the visit waits with a "payment needed" notification.
+- Monthly visits keep the day of the month, so the 31st becomes the 30th in November.
+- Customers can skip the next visit, pause, resume (missed visits are skipped, never booked in the past) or stop.
+- A scheduler in the server process books due visits and hands "book again" jobs to everyone when their window ends. It checks every minute and is safe to run more than once.
+
+All dates and times are shown and entered in `TIMEZONE`, so a visit booked for 09:00 is 09:00 in South Africa, whatever the device's clock says.
 
 ## Notifications
 
@@ -242,6 +271,9 @@ server/src
   providers.js   pro work settings: trades, working hours, service area
   earnings.js    pro earnings dashboard
   time.js        time zones, working-hours checks, period starts
+  invoices.js    invoice issuing (frozen snapshots) and PDF rendering
+  bookings.js    favourite pros and repeat bookings (+ the scheduler that books visits)
+  platform.js    admin-editable business details and VAT settings
   sms/           SMS provider adapters (console, twilio, bulksms) - add your own here
   create-admin.js  CLI to create an admin account
   geocoder.js    address search / reverse lookup (Nominatim), throttled + cached
@@ -294,6 +326,8 @@ npm start         # serves API + app on PORT (default 4000)
 | `DB_FILE` | `services.db` | SQLite file |
 | `TIMEZONE` | `Africa/Johannesburg` | Working hours and today / week / month earnings use this |
 | `DISPATCH_RADIUS_KM` | `30` | Service radius for pros who haven't set their own area |
+| `RECURRING_LEAD_HOURS` | `48` | How far ahead repeat visits are booked and charged |
+| `PREFERRED_PRO_WINDOW_MINUTES` / `..._SCHEDULED_MINUTES` | `5` / `60` | How long a "book again" pro has the job to themselves |
 | `MAX_SERVICE_RADIUS_KM` | `100` | Largest radius a pro can choose |
 | `UPLOAD_DIR` | `uploads` | Where verification documents are stored. Keep private and backed up |
 | `TOKEN_SECRET` | dev value | **Set this in production** |
@@ -327,6 +361,7 @@ npm test
 
 ## Roadmap
 
+- Credit notes for refunds made after an invoice is issued
 - Cancellation fees once a pro is on the way; automatically expire unpaid bookings
 - Automatic ID and face matching through a verification provider
 - Delivery receipts from the SMS provider, and a notification history clean-up job

@@ -22,6 +22,7 @@ let db;
 let uploadDir;
 let adminToken;
 let notifier;
+let runScheduler;
 let clockTime = null; // null = real time; tests set it to check working hours
 const sentSms = [];
 const pushed = []; // { endpoint, headers, payload }
@@ -43,10 +44,11 @@ before(async () => {
     if (goneEndpoints.has(subscription.endpoint)) throw Object.assign(new Error('Gone'), { statusCode: 410 });
     pushed.push({ endpoint: subscription.endpoint, headers: request.headers, payload: JSON.parse(payload) });
   };
-  ({ server, notifier } = createApp({
+  ({ server, notifier, runScheduler } = createApp({
     db, geocoder, paystack, uploadDir, smsProvider,
     pushOptions: { allowEndpoint: (host) => host === 'push.test', sendNotification },
     now: () => (clockTime ? new Date(clockTime) : new Date()),
+    schedulerIntervalMs: 0,
   }));
   await new Promise((resolve) => server.listen(0, resolve));
   base = `http://localhost:${server.address().port}`;
@@ -919,6 +921,269 @@ describe('earnings dashboard', () => {
     } finally {
       clockTime = null;
     }
+  });
+});
+
+/** A completed, paid job between this customer and pro. */
+async function completedJob(customer, pro, extra = {}) {
+  const { id } = await book(customer, extra);
+  await call('POST', `/jobs/${id}/accept`, { token: pro.token });
+  for (const status of ['en_route', 'arrived', 'in_progress']) await call('POST', `/jobs/${id}/status`, { token: pro.token, body: { status } });
+  await call('POST', `/jobs/${id}/status`, { token: pro.token, body: { status: 'completed', materialsCents: extra.materialsCents ?? 0 } });
+  return id;
+}
+async function pdf(path, token) {
+  const res = await fetch(`${base}/api${path}`, { headers: { authorization: `Bearer ${token}` } });
+  return { status: res.status, type: res.headers.get('content-type'), disposition: res.headers.get('content-disposition'), bytes: Buffer.from(await res.arrayBuffer()) };
+}
+
+describe('invoices', () => {
+  test('a completed job has a numbered PDF invoice for its customer', async () => {
+    const customer = await register('customer');
+    const pro = await onlinePro();
+    const id = await completedJob(customer, pro);
+    const inv = await call('GET', `/jobs/${id}/invoice`, { token: customer.token });
+    assert.equal(inv.status, 200);
+    assert.match(inv.body.number, /^INV-\d{4}-\d{5}$/);
+    assert.equal(inv.body.vat.enabled, false);
+    assert.equal(inv.body.lines.length, 1);
+    assert.equal(inv.body.paidCents, inv.body.totalCents);
+    assert.equal(inv.body.customer.email, customer.user.email);
+
+    const file = await pdf(`/jobs/${id}/invoice.pdf`, customer.token);
+    assert.equal(file.status, 200);
+    assert.equal(file.type, 'application/pdf');
+    assert.match(file.disposition, new RegExp(`${inv.body.number}\\.pdf`));
+    assert.equal(file.bytes.subarray(0, 5).toString(), '%PDF-');
+    assert.match(file.bytes.subarray(-8).toString(), /%%EOF/);
+
+    // Same invoice every time.
+    assert.equal((await call('GET', `/jobs/${id}/invoice`, { token: customer.token })).body.number, inv.body.number);
+    // Only the customer (and admins).
+    assert.equal((await pdf(`/jobs/${id}/invoice.pdf`, pro.token)).status, 403);
+    assert.equal((await call('GET', `/jobs/${id}/invoice`, { token: (await register('customer')).token })).status, 403);
+    assert.equal((await pdf(`/jobs/${id}/invoice.pdf`, adminToken)).status, 200);
+  });
+
+  test('no invoice before the job is done, or while parts are unpaid', async () => {
+    const { customer, id } = await jobInProgress();
+    assert.equal((await call('GET', `/jobs/${id}/invoice`, { token: customer.token })).status, 409);
+    const pro = await onlinePro();
+    const withParts = await completedJob(customer, pro, { materialsCents: 5000 });
+    const blocked = await call('GET', `/jobs/${withParts}/invoice`, { token: customer.token });
+    assert.equal(blocked.status, 409);
+    assert.match(blocked.body.error, /parts/);
+    await call('POST', `/jobs/${withParts}/materials/payment`, { token: customer.token });
+    const inv = await call('GET', `/jobs/${withParts}/invoice`, { token: customer.token });
+    assert.deepEqual(inv.body.lines.map((l) => l.amountCents).slice(1), [5000]);
+  });
+
+  test('VAT can be switched on; issued invoices never change', async () => {
+    const customer = await register('customer');
+    const pro = await onlinePro();
+    const before = await completedJob(customer, pro);
+    const old = await call('GET', `/jobs/${before}/invoice`, { token: customer.token });
+
+    assert.equal((await call('PUT', '/admin/settings', { token: customer.token, body: { vatEnabled: true } })).status, 403);
+    assert.equal((await admin('PUT', '/settings', { vatEnabled: true })).status, 400, 'a VAT number is required');
+    assert.equal((await admin('PUT', '/settings', { vatEnabled: true, vatNumber: '123' })).status, 400);
+    const saved = await admin('PUT', '/settings', { vatEnabled: true, vatNumber: '4123456789', businessName: 'ProNow (Pty) Ltd', businessAddress: '1 Main Rd, Johannesburg' });
+    assert.equal(saved.body.vatEnabled, true);
+
+    const after = await completedJob(customer, pro);
+    const inv = await call('GET', `/jobs/${after}/invoice`, { token: customer.token });
+    assert.deepEqual(inv.body.vat, { enabled: true, rate: 15, number: '4123456789', includedCents: Math.round((inv.body.paidCents * 15) / 115) });
+    assert.equal(inv.body.business.name, 'ProNow (Pty) Ltd');
+    assert.ok(inv.body.number > old.body.number, 'numbers go up');
+    assert.deepEqual((await call('GET', `/jobs/${before}/invoice`, { token: customer.token })).body, old.body, 'the earlier invoice is unchanged');
+
+    await admin('PUT', '/settings', { vatEnabled: false });
+    assert.equal((await call('GET', `/jobs/${after}/invoice`, { token: customer.token })).body.vat.enabled, true, 'still a tax invoice');
+  });
+
+  test('refunds made before the invoice is issued are shown on it', async () => {
+    const customer = await register('customer');
+    const pro = await onlinePro();
+    const id = await completedJob(customer, pro);
+    await admin('POST', `/jobs/${id}/refunds`, { amountCents: 10000, reason: 'Late arrival' });
+    const inv = await call('GET', `/jobs/${id}/invoice`, { token: customer.token });
+    assert.equal(inv.body.refundedCents, 10000);
+    assert.equal(inv.body.paidCents, inv.body.totalCents - 10000);
+    assert.equal(inv.body.refunds.length, 1);
+  });
+});
+
+describe('book again and favourites', () => {
+  test('the chosen pro gets first refusal, then everyone', async () => {
+    const customer = await register('customer');
+    const sipho = await onlinePro(['cleaning']);
+    await completedJob(customer, sipho, { categoryId: 'cleaning' });
+    const other = await onlinePro(['cleaning']);
+
+    const est = await call('POST', '/estimate', { token: customer.token, body: jobBody({ categoryId: 'cleaning', preferredProviderId: sipho.user.id }) });
+    assert.deepEqual(est.body.preferred, { id: sipho.user.id, name: sipho.user.name, available: true });
+
+    try {
+      clockTime = new Date().toISOString();
+      const { id } = await book(customer, { categoryId: 'cleaning', preferredProviderId: sipho.user.id });
+      const job = await call('GET', `/jobs/${id}`, { token: customer.token });
+      assert.equal(job.body.preferredProvider.id, sipho.user.id);
+      assert.ok(job.body.preferredProvider.reservedUntil);
+      assert.ok((await feedIds(sipho)).includes(id));
+      assert.ok(!(await feedIds(other)).includes(id), 'reserved for the chosen pro');
+      assert.equal((await call('POST', `/jobs/${id}/accept`, { token: other.token })).status, 409);
+      assert.equal((await call('GET', '/provider/requests', { token: sipho.token })).body.find((j) => j.id === id).askedForYou, true);
+
+      // Window passes: everyone gets it, and the customer is told.
+      clockTime = new Date(Date.now() + 6 * 60000).toISOString();
+      await runScheduler();
+      assert.ok((await feedIds(other)).includes(id));
+      await notifier.idle();
+      assert.ok((await call('GET', '/notifications', { token: customer.token })).body.items.some((n) => n.type === 'preferred_unavailable'));
+      assert.equal((await call('POST', `/jobs/${id}/accept`, { token: other.token })).status, 200);
+    } finally {
+      clockTime = null;
+    }
+  });
+
+  test('if the chosen pro is unavailable the job goes to everyone straight away', async () => {
+    const customer = await register('customer');
+    const sipho = await onlinePro(['cleaning']);
+    await completedJob(customer, sipho, { categoryId: 'cleaning' });
+    await call('PATCH', '/provider/status', { token: sipho.token, body: { online: false } });
+    const other = await onlinePro(['cleaning']);
+    const est = await call('POST', '/estimate', { token: customer.token, body: jobBody({ categoryId: 'cleaning', preferredProviderId: sipho.user.id }) });
+    assert.equal(est.body.preferred.available, false);
+    const { id } = await book(customer, { categoryId: 'cleaning', preferredProviderId: sipho.user.id });
+    assert.ok((await feedIds(other)).includes(id));
+  });
+
+  test('you can only rebook or save pros who have worked for you', async () => {
+    const customer = await register('customer');
+    const stranger = await onlinePro(['cleaning']);
+    const created = await call('POST', '/jobs', { token: customer.token, body: jobBody({ categoryId: 'cleaning', preferredProviderId: stranger.user.id }) });
+    assert.equal(created.status, 400);
+    assert.equal((await call('PUT', `/favourites/${stranger.user.id}`, { token: customer.token })).status, 400);
+
+    const pro = await onlinePro(['cleaning']);
+    await completedJob(customer, pro, { categoryId: 'cleaning' });
+    const wrongTrade = await call('POST', '/jobs', { token: customer.token, body: jobBody({ categoryId: 'electrical', preferredProviderId: pro.user.id }) });
+    assert.equal(wrongTrade.status, 400);
+    assert.match(wrongTrade.body.error, /doesn't offer/);
+  });
+
+  test('favourite pros', async () => {
+    const customer = await register('customer');
+    const pro = await onlinePro(['cleaning', 'gardening']);
+    const jobId = await completedJob(customer, pro, { categoryId: 'cleaning' });
+    const added = await call('PUT', `/favourites/${pro.user.id}`, { token: customer.token });
+    assert.equal(added.status, 200);
+    await call('PUT', `/favourites/${pro.user.id}`, { token: customer.token }); // idempotent
+    const list = (await call('GET', '/favourites', { token: customer.token })).body;
+    assert.equal(list.length, 1);
+    assert.equal(list[0].id, pro.user.id);
+    assert.deepEqual(list[0].categories, ['cleaning', 'gardening']);
+    assert.equal(list[0].jobsTogether, 1);
+    assert.equal(list[0].lastJobId, jobId);
+    assert.equal(list[0].verified, true);
+    assert.deepEqual((await call('DELETE', `/favourites/${pro.user.id}`, { token: customer.token })).body, []);
+    assert.equal((await call('GET', '/favourites', { token: pro.token })).status, 403);
+  });
+});
+
+describe('repeat bookings', () => {
+  const recurringBody = (extra = {}) => ({ ...jobBody({ categoryId: 'gardening', description: 'Mow the lawn' }), frequency: 'weekly', ...extra });
+
+  test('weekly: first visit through checkout, later visits booked ahead on the saved card', async () => {
+    const customer = await register('customer');
+    const gardener = await onlinePro(['gardening']);
+    try {
+      clockTime = '2026-10-15T08:00:00Z'; // Thursday 10:00 in Johannesburg
+      const created = await call('POST', '/recurring', { token: customer.token, body: recurringBody({ firstVisitAt: '2026-10-19T07:00:00Z' }) });
+      assert.equal(created.status, 201, JSON.stringify(created.body));
+      assert.equal(created.body.recurring.frequencyLabel, 'Every week');
+      assert.equal(created.body.recurring.localTime, '09:00');
+      assert.equal(created.body.recurring.nextVisitAt, '2026-10-26T07:00:00.000Z');
+      // First visit is paid through checkout, which also saves the card.
+      fake.pay(created.body.payment.reference);
+      const first = await call('POST', `/jobs/${created.body.job.id}/payment/confirm`, { token: customer.token, body: { reference: created.body.payment.reference } });
+      assert.equal(first.body.status, 'requested');
+      assert.equal(first.body.recurringId, created.body.recurring.id);
+      assert.equal(first.body.scheduledFor, '2026-10-19T07:00:00.000Z');
+
+      // Not yet within 48 hours of the next visit.
+      assert.equal(await runScheduler().then(() => db.prepare('SELECT COUNT(*) AS n FROM jobs WHERE recurring_id = ?').get(created.body.recurring.id).n), 1);
+
+      clockTime = '2026-10-24T08:00:00Z'; // two days before the 26th
+      await runScheduler();
+      await runScheduler(); // a second run must not book it twice
+      const jobs = db.prepare('SELECT * FROM jobs WHERE recurring_id = ? ORDER BY id').all(created.body.recurring.id);
+      assert.equal(jobs.length, 2);
+      assert.equal(jobs[1].scheduled_for, '2026-10-26T07:00:00.000Z');
+      assert.equal(jobs[1].status, 'requested', 'charged to the saved card and sent to pros');
+      assert.equal(jobs[1].surge, 1);
+      assert.ok((await feedIds(gardener)).includes(jobs[1].id));
+      await notifier.idle();
+      const note = (await call('GET', '/notifications', { token: customer.token })).body.items.find((n) => n.type === 'recurring_booked');
+      assert.match(note.body, /Mon,? 26 Oct,? 09:00\. R\d+ was charged to your saved card/);
+
+      const list = (await call('GET', '/recurring', { token: customer.token })).body;
+      assert.equal(list[0].nextVisitAt, '2026-11-02T07:00:00.000Z');
+      assert.equal(list[0].upcomingJobs.length, 2);
+    } finally {
+      clockTime = null;
+    }
+  });
+
+  test('a declined saved card leaves the visit waiting for payment and tells the customer', async () => {
+    const customer = await register('customer');
+    try {
+      clockTime = '2026-10-15T08:00:00Z';
+      const created = await call('POST', '/recurring', { token: customer.token, body: recurringBody({ firstVisitAt: '2026-10-16T07:00:00Z' }) });
+      fake.pay(created.body.payment.reference);
+      await call('POST', `/jobs/${created.body.job.id}/payment/confirm`, { token: customer.token, body: { reference: created.body.payment.reference } });
+      fake.state.savedCardStatus = 'failed';
+      clockTime = '2026-10-21T08:00:00Z';
+      await runScheduler();
+      const visit = db.prepare('SELECT * FROM jobs WHERE recurring_id = ? ORDER BY id DESC').get(created.body.recurring.id);
+      assert.equal(visit.status, 'awaiting_payment');
+      await notifier.idle();
+      assert.ok((await call('GET', '/notifications', { token: customer.token })).body.items.some((n) => n.type === 'recurring_payment_needed' && n.jobId === visit.id));
+    } finally {
+      fake.state.savedCardStatus = 'success';
+      clockTime = null;
+    }
+  });
+
+  test('pause, resume, skip and cancel', async () => {
+    const customer = await register('customer');
+    try {
+      clockTime = '2026-10-15T08:00:00Z';
+      const { body } = await call('POST', '/recurring', { token: customer.token, body: recurringBody({ frequency: 'monthly', firstVisitAt: '2026-10-31T07:00:00Z' }) });
+      const id = body.recurring.id;
+      assert.equal(body.recurring.nextVisitAt, '2026-11-30T07:00:00.000Z', '31st clamps to the end of November');
+      assert.equal((await call('POST', `/recurring/${id}/skip`, { token: customer.token })).body.nextVisitAt, '2026-12-31T07:00:00.000Z', 'and back to the 31st');
+
+      assert.equal((await call('PATCH', `/recurring/${id}`, { token: customer.token, body: { status: 'paused' } })).body.nextVisitAt, null);
+      clockTime = '2027-02-10T08:00:00Z';
+      await runScheduler();
+      assert.equal(db.prepare('SELECT COUNT(*) AS n FROM jobs WHERE recurring_id = ?').get(id).n, 1, 'nothing booked while paused');
+      const resumed = await call('PATCH', `/recurring/${id}`, { token: customer.token, body: { status: 'active' } });
+      assert.equal(resumed.body.nextVisitAt, '2027-02-28T07:00:00.000Z', 'missed visits are skipped, not booked in the past');
+
+      const other = await register('customer');
+      assert.equal((await call('PATCH', `/recurring/${id}`, { token: other.token, body: { status: 'cancelled' } })).status, 403);
+      await call('PATCH', `/recurring/${id}`, { token: customer.token, body: { status: 'cancelled' } });
+      assert.deepEqual((await call('GET', '/recurring', { token: customer.token })).body, []);
+    } finally {
+      clockTime = null;
+    }
+  });
+
+  test('repeat bookings are validated', async () => {
+    const customer = await register('customer');
+    assert.equal((await call('POST', '/recurring', { token: customer.token, body: recurringBody({ frequency: 'daily', firstVisitAt: '2030-01-01T08:00:00Z' }) })).status, 400);
+    assert.equal((await call('POST', '/recurring', { token: customer.token, body: recurringBody({ firstVisitAt: new Date(Date.now() + 60000).toISOString() }) })).status, 400);
   });
 });
 

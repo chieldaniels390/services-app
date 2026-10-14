@@ -57,6 +57,27 @@ export const TEMPLATES = {
     tag: 'offers',
     channels: { push: true }, // the request list is the in-app view
   }),
+  rebook_offer: ({ job, distanceKm, payoutCents }) => ({
+    title: `${first(job.customer_name)} wants to book you again`,
+    body: `${job.category_name} · ${distanceKm} km away · you'd earn ${rand(payoutCents)}. It's yours first for a few minutes.`,
+    tag: 'offers',
+    channels: { push: true, inApp: true },
+  }),
+  preferred_unavailable: ({ job }) => ({
+    title: 'Sent to other pros',
+    body: `The pro you asked for isn't available, so your ${job.category_name.toLowerCase()} request has gone to other trusted pros nearby.`,
+    channels: { inApp: true, push: true },
+  }),
+  recurring_booked: ({ job, when }) => ({
+    title: `Your ${job.category_name.toLowerCase()} visit is booked`,
+    body: `${when}. ${rand(job.estimated_cents)} was charged to your saved card.`,
+    channels: { inApp: true, push: true },
+  }),
+  recurring_payment_needed: ({ job, when }) => ({
+    title: `Payment needed for your ${job.category_name.toLowerCase()} visit`,
+    body: `We couldn't charge your saved card for ${when}. Tap to pay so we can find your pro.`,
+    channels: { inApp: true, push: true },
+  }),
   new_message: ({ job, senderName, text }) => ({
     title: senderName,
     body: text.length > 120 ? `${text.slice(0, 117)}...` : text,

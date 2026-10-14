@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { api } from '../../api.js';
+import { api, downloadFile } from '../../api.js';
 import { PAYOUT_LABELS, STATUS_LABELS, money, timeOnly, when } from '../../format.js';
 import { useSession, useSocketEvent } from '../../session.jsx';
 
@@ -152,6 +152,14 @@ export default function AdminJob({ onChange }) {
           <h2 className="grow">{job.category.icon} Job #{job.id} · {job.category.name}</h2>
           <span className={`pill status-${job.status}`}>{STATUS_LABELS[job.status]}</span>
           {openDispute && <span className="pill dispute-pill">Disputed</span>}
+          {job.hasInvoice && (
+            <button className="btn" onClick={() => api(`/jobs/${job.id}/invoice`)
+              .then((inv) => downloadFile(`/jobs/${job.id}/invoice.pdf`, `${inv.number}.pdf`))
+              .catch((e) => setError(e.message))}
+            >
+              ⬇ Invoice
+            </button>
+          )}
         </div>
         <p>{job.description}</p>
         <p className="muted small">📍 {job.address} · {job.sizeLabel}{job.scheduledFor && ` · scheduled ${when(job.scheduledFor)}`}</p>

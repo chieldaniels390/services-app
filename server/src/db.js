@@ -196,6 +196,43 @@ CREATE TABLE IF NOT EXISTS sms_messages (
 );
 CREATE INDEX IF NOT EXISTS sms_messages_job ON sms_messages (job_id);
 
+CREATE TABLE IF NOT EXISTS favourites (
+  customer_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (customer_id, provider_id)
+);
+
+-- A repeating booking (e.g. weekly garden service). Each visit becomes a normal job, created ahead of time.
+CREATE TABLE IF NOT EXISTS recurring_bookings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL REFERENCES users(id),
+  preferred_provider_id INTEGER REFERENCES users(id),
+  category_id TEXT NOT NULL REFERENCES categories(id),
+  size TEXT NOT NULL,
+  description TEXT NOT NULL,
+  address TEXT NOT NULL,
+  lat REAL NOT NULL,
+  lng REAL NOT NULL,
+  frequency TEXT NOT NULL CHECK (frequency IN ('weekly', 'monthly')),
+  local_time TEXT NOT NULL,          -- HH:MM in the platform time zone
+  anchor_day INTEGER NOT NULL,       -- day of month the series started on (monthly visits keep it, clamped to month end)
+  next_visit_at TEXT NOT NULL,       -- UTC instant of the next visit that has no job yet
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'cancelled')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS recurring_due ON recurring_bookings (status, next_visit_at);
+
+-- Issued invoices. The data is a snapshot, so an invoice never changes after it's issued
+-- (e.g. if VAT is switched on later, or a refund happens afterwards).
+CREATE TABLE IF NOT EXISTS invoices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL UNIQUE REFERENCES jobs(id),
+  number TEXT NOT NULL UNIQUE,
+  issued_at TEXT NOT NULL DEFAULT (datetime('now')),
+  data TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -227,6 +264,11 @@ const ADDED_COLUMNS = [
   // approved | pending. Trades added after verification are pending until an admin approves them.
   // Existing rows default to approved: they were part of the pro's original verification.
   ['provider_categories', 'status', "TEXT NOT NULL DEFAULT 'approved'"],
+  // "Book again": the chosen pro gets first refusal until preferred_until, then the job goes to everyone.
+  ['jobs', 'preferred_provider_id', 'INTEGER REFERENCES users(id)'],
+  ['jobs', 'preferred_until', 'TEXT'],
+  ['jobs', 'preferred_released', 'INTEGER NOT NULL DEFAULT 0'],
+  ['jobs', 'recurring_id', 'INTEGER REFERENCES recurring_bookings(id)'],
 ];
 
 /**

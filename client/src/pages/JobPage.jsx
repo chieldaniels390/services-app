@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import FavouriteButton from '../components/FavouriteButton.jsx';
+import { downloadFile } from '../api.js';
 import { api } from '../api.js';
 import Chat from '../components/Chat.jsx';
 import PushPrompt from '../components/PushPrompt.jsx';
@@ -83,6 +85,31 @@ function useLiveGps(active, emit) {
     return () => navigator.geolocation.clearWatch(watch);
   }, [active, emit]);
   return error;
+}
+
+function CompletedActions({ job, onError }) {
+  const navigate = useNavigate();
+  const [favourites, setFavourites] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api('/favourites').then(setFavourites).catch(() => setFavourites([])); }, []);
+  async function invoice() {
+    setBusy(true);
+    try {
+      const { number } = await api(`/jobs/${job.id}/invoice`);
+      await downloadFile(`/jobs/${job.id}/invoice.pdf`, `${number}.pdf`);
+    } catch (e) {
+      onError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="card booking-actions">
+      <button className="btn primary" onClick={() => navigate(`/?rebook=${job.id}`)}>↻ Book {job.provider.name.split(' ')[0]} again</button>
+      {job.hasInvoice && <button className="btn" disabled={busy} onClick={invoice}>{busy ? 'Preparing…' : '⬇ Invoice (PDF)'}</button>}
+      {favourites && <FavouriteButton pro={job.provider} saved={favourites.some((f) => f.id === job.provider.id)} onChange={setFavourites} />}
+    </section>
+  );
 }
 
 export default function JobPage() {
@@ -208,6 +235,10 @@ export default function JobPage() {
             </div>
           </div>
           {job.status === 'requested' && !isPro && <div className="searching"><span /></div>}
+          {job.status === 'requested' && !isPro && job.preferredProvider?.reservedUntil && (
+            <p className="muted small">Asking {job.preferredProvider.name} first, as you requested.</p>
+          )}
+          {isPro && job.askedForYou && job.status === 'requested' && <p className="notice">⭐ This customer asked for you by name.</p>}
           {eta != null && <p className="eta">Arriving in about <strong>{eta} min</strong></p>}
           {job.status === 'awaiting_payment' ? (
             <>
@@ -386,6 +417,13 @@ export default function JobPage() {
             <p className="stars">{'★'.repeat(job.review.rating)}{'☆'.repeat(5 - job.review.rating)}</p>
             {job.review.comment && <p className="muted">“{job.review.comment}”</p>}
           </section>
+        )}
+
+        {!isPro && job.status === 'completed' && job.provider && (
+          <CompletedActions job={job} onError={setError} />
+        )}
+        {job.recurringId && !isPro && (
+          <p className="muted small">↻ Part of a repeat booking. <Link to="/history?tab=repeat">Manage it</Link></p>
         )}
 
         {(mine || (!isPro && job.provider)) && <ReportProblem job={job} onChange={setJob} />}

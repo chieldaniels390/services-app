@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { api, getToken, storeToken } from './api.js';
-import { setMoneyFormat } from './format.js';
+import { setMoneyFormat, setTimeZone } from './format.js';
 import { detachPushSubscription, registerServiceWorker, syncPushSubscription } from './push.js';
 
 const SessionContext = createContext(null);
@@ -18,6 +18,7 @@ export function SessionProvider({ children }) {
     Promise.all([api('/config'), api('/categories')])
       .then(([cfg, cats]) => {
         setMoneyFormat(cfg);
+        setTimeZone(cfg.timezone);
         setConfig(cfg);
         setCategories(cats);
       })
