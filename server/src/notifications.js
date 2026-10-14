@@ -119,6 +119,12 @@ export const TEMPLATES = {
     url: '/work',
     channels: { inApp: true, push: true },
   }),
+  review_received: ({ job, rating }) => ({
+    title: `${first(job.customer_name)} rated you ${rating} star${rating === 1 ? '' : 's'}`,
+    body: `For the ${job.category_name.toLowerCase()} job on #${job.id}. See your reviews on your profile.`,
+    url: `/pros/${job.provider_id}`,
+    channels: { inApp: true, push: true },
+  }),
   dispute_opened: ({ job }) => ({
     title: `A problem was reported on job #${job.id}`,
     body: 'Our team is looking into it and will be in touch.',

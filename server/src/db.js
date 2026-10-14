@@ -233,6 +233,21 @@ CREATE TABLE IF NOT EXISTS invoices (
   data TEXT NOT NULL
 );
 
+-- Two-way reviews: after a job the customer rates the pro and the pro rates the customer (one each).
+-- Replaces the older customer-only \`ratings\` table, whose rows are copied in on first start.
+CREATE TABLE IF NOT EXISTS reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id),
+  reviewer_id INTEGER NOT NULL REFERENCES users(id),
+  reviewee_id INTEGER NOT NULL REFERENCES users(id),
+  reviewer_role TEXT NOT NULL CHECK (reviewer_role IN ('customer', 'provider')),
+  rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+  comment TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (job_id, reviewer_role)
+);
+CREATE INDEX IF NOT EXISTS reviews_reviewee ON reviews (reviewee_id, id);
+
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -303,12 +318,31 @@ function allowAdminRole(db) {
   }
 }
 
+/**
+ * One-off: copy customer ratings from the old table into `reviews` and recalculate every pro's cached
+ * average from it. Recorded in settings so it only ever runs once.
+ */
+function migrateRatings(db) {
+  if (db.prepare("SELECT 1 FROM settings WHERE key = 'migration:reviews'").get()) return;
+  transaction(db, () => {
+    db.exec(`
+      INSERT OR IGNORE INTO reviews (job_id, reviewer_id, reviewee_id, reviewer_role, rating, comment, created_at)
+      SELECT r.job_id, j.customer_id, j.provider_id, 'customer', r.rating, r.comment, r.created_at
+      FROM ratings r JOIN jobs j ON j.id = r.job_id WHERE j.provider_id IS NOT NULL;
+      UPDATE provider_profiles SET
+        rating_sum = (SELECT COALESCE(SUM(rating), 0) FROM reviews WHERE reviewee_id = provider_profiles.user_id),
+        rating_count = (SELECT COUNT(*) FROM reviews WHERE reviewee_id = provider_profiles.user_id);
+      INSERT INTO settings (key, value) VALUES ('migration:reviews', 'done');`);
+  });
+}
+
 function migrate(db) {
   allowAdminRole(db);
   for (const [table, column, definition] of ADDED_COLUMNS) {
     const exists = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
     if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
+  migrateRatings(db);
 }
 
 export function openDb(file = ':memory:') {

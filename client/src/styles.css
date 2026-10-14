@@ -495,3 +495,26 @@ label.radio input { width: auto; }
 .field .segmented + .segmented { margin-top: 0.4rem; }
 .settings-form { max-width: 720px; margin: 0 auto; }
 .settings-form .setting { border-top: none; padding-top: 0; }
+
+/* Reviews and profiles */
+.person-name { font-weight: 700; color: var(--text); }
+.review-line + .review-line, .card > h3 + .review-line { margin-top: 0.75rem; }
+.review-line h3 { font-size: 0.95rem; margin-bottom: 0.2rem; }
+.pro-profile { display: flex; flex-direction: column; gap: 0.75rem; max-width: 720px; margin: 0 auto; }
+.profile-head { display: flex; gap: 1rem; align-items: flex-start; }
+.profile-head h2 { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.breakdown { gap: 0.15rem; }
+.breakdown-row { display: grid; grid-template-columns: 2rem 1fr 1.5rem; align-items: center; gap: 0.4rem; }
+.breakdown-track { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.breakdown-track span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.review-list { list-style: none; margin: 0; padding: 0; }
+.review-list li { padding: 0.7rem 0; border-top: 1px solid var(--border); }
+.review-list li:first-child { border-top: none; }
+.review-list li p { margin: 0.3rem 0 0; }
+.review-list.compact li { padding: 0.45rem 0; }
+.flag-card { display: flex; flex-direction: column; gap: 0.5rem; }
+.flag-card .right { display: flex; flex-direction: column; align-items: flex-end; }
+.low-rating { color: var(--danger); font-size: 1.3rem; }
+.pill.flag-pill { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); margin-left: 0.3rem; }
+.pill.role-provider { background: var(--brand-soft); color: var(--brand-strong); }
+.pill.role-customer { background: var(--bg); color: var(--muted); }

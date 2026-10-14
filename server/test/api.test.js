@@ -179,7 +179,7 @@ describe('job lifecycle', () => {
     assert.equal(done.body.materialsStatus, 'unpaid');
 
     const rated = await call('POST', `/jobs/${id}/rate`, { token: customer.token, body: { rating: 5, comment: 'Great' } });
-    assert.equal(rated.body.review.rating, 5);
+    assert.deepEqual([rated.body.reviews.mine.rating, rated.body.reviews.mine.comment, rated.body.reviews.canReview], [5, 'Great', false]);
     assert.equal((await call('POST', `/jobs/${id}/rate`, { token: customer.token, body: { rating: 4 } })).status, 409);
 
     const me = await call('GET', '/me', { token: pro.token });
@@ -1184,6 +1184,134 @@ describe('repeat bookings', () => {
     const customer = await register('customer');
     assert.equal((await call('POST', '/recurring', { token: customer.token, body: recurringBody({ frequency: 'daily', firstVisitAt: '2030-01-01T08:00:00Z' }) })).status, 400);
     assert.equal((await call('POST', '/recurring', { token: customer.token, body: recurringBody({ firstVisitAt: new Date(Date.now() + 60000).toISOString() }) })).status, 400);
+  });
+});
+
+describe('two-way ratings', () => {
+  test('customer and pro rate each other once; each sees the right things', async () => {
+    const customer = await register('customer');
+    const pro = await onlinePro(['painting']);
+    const id = await completedJob(customer, pro, { categoryId: 'painting' });
+
+    const before = (await call('GET', `/jobs/${id}`, { token: pro.token })).body.reviews;
+    assert.deepEqual(before, { mine: null, theirs: null, canReview: true });
+
+    assert.equal((await call('POST', `/jobs/${id}/rate`, { token: pro.token, body: { rating: 0 } })).status, 400);
+    const proRated = await call('POST', `/jobs/${id}/rate`, { token: pro.token, body: { rating: 4, comment: 'Friendly, clear brief' } });
+    assert.equal(proRated.status, 200);
+    assert.deepEqual(proRated.body.reviews.mine, { rating: 4, comment: 'Friendly, clear brief', createdAt: proRated.body.reviews.mine.createdAt });
+    assert.equal((await call('POST', `/jobs/${id}/rate`, { token: pro.token, body: { rating: 5 } })).status, 409, 'once only');
+
+    await call('POST', `/jobs/${id}/rate`, { token: customer.token, body: { rating: 5, comment: 'Neat work' } });
+    // The pro sees the customer's (public) review of them; the customer doesn't see the pro's review of them.
+    assert.equal((await call('GET', `/jobs/${id}`, { token: pro.token })).body.reviews.theirs.comment, 'Neat work');
+    const customerView = (await call('GET', `/jobs/${id}`, { token: customer.token })).body;
+    assert.equal(customerView.reviews.theirs, null);
+    assert.equal(customerView.customer.rating, undefined, "customers don't see their own rating on the job");
+
+    // Pros see the customer's average on later jobs.
+    const { id: next } = await book(customer, { categoryId: 'painting' });
+    const offered = (await call('GET', '/provider/requests', { token: pro.token })).body.find((j) => j.id === next);
+    assert.deepEqual([offered.customer.rating, offered.customer.ratingCount], [4, 1]);
+    assert.equal((await call('GET', '/me', { token: customer.token })).body.rating, 4);
+
+    // Outsiders can't rate.
+    assert.equal((await call('POST', `/jobs/${id}/rate`, { token: (await register('customer')).token, body: { rating: 1 } })).status, 403);
+  });
+
+  test('ratings close after the review window and need a finished job', async () => {
+    const { customer, id } = await jobInProgress();
+    assert.equal((await call('POST', `/jobs/${id}/rate`, { token: customer.token, body: { rating: 5 } })).status, 409);
+    const pro = await onlinePro(['painting']);
+    const done = await completedJob(customer, pro, { categoryId: 'painting' });
+    try {
+      clockTime = new Date(Date.now() + 15 * 86400000).toISOString();
+      const late = await call('POST', `/jobs/${done}/rate`, { token: customer.token, body: { rating: 5 } });
+      assert.equal(late.status, 409);
+      assert.match(late.body.error, /14 days/);
+      assert.equal((await call('GET', `/jobs/${done}`, { token: customer.token })).body.reviews.canReview, false);
+    } finally {
+      clockTime = null;
+    }
+  });
+
+  test('a pro profile shows the average, completed jobs and recent reviews', async () => {
+    const pro = await onlinePro(['gardening']);
+    const ratings = [5, 4, 5];
+    for (const [i, r] of ratings.entries()) {
+      const customer = await register('customer', { name: `Thabo Mokoena${i}` });
+      const id = await completedJob(customer, pro, { categoryId: 'gardening' });
+      await call('POST', `/jobs/${id}/rate`, { token: customer.token, body: { rating: r, comment: `Visit ${i}` } });
+    }
+    const viewer = await register('customer');
+    const { body } = await call('GET', `/pros/${pro.user.id}`, { token: viewer.token });
+    assert.equal(body.rating, 4.7);
+    assert.equal(body.ratingCount, 3);
+    assert.equal(body.completedJobs, 3);
+    assert.deepEqual(body.breakdown, { 1: 0, 2: 0, 3: 0, 4: 1, 5: 2 });
+    assert.deepEqual(body.recentReviews.map((r) => r.comment), ['Visit 2', 'Visit 1', 'Visit 0']);
+    assert.equal(body.recentReviews[0].reviewer, 'Thabo M.', 'first name and initial only');
+    assert.equal(body.recentReviews[0].categoryName, 'Gardening');
+    assert.equal(body.verified, true);
+    assert.equal((await call('GET', `/pros/${viewer.user.id}`, { token: viewer.token })).status, 404, 'customers have no public profile');
+    // The cached average used for matching agrees.
+    assert.equal((await call('GET', '/me', { token: pro.token })).body.provider.rating, 4.7);
+  });
+
+  test('admins see users whose rating has dropped below 3.5 (after 3+ reviews)', async () => {
+    const pro = await onlinePro(['pest-control']);
+    const rude = await register('customer', { name: 'Rude Customer' });
+    const flaggedIds = async () => (await admin('GET', '/flags')).body.users.map((u) => u.id);
+    for (const [i, r] of [2, 3].entries()) {
+      const customer = await register('customer');
+      const id = await completedJob(customer, pro, { categoryId: 'pest-control' });
+      await call('POST', `/jobs/${id}/rate`, { token: customer.token, body: { rating: r, comment: `Bad ${i}` } });
+    }
+    assert.ok(!(await flaggedIds()).includes(pro.user.id), 'two reviews are not enough to flag anyone');
+    const third = await register('customer');
+    const id = await completedJob(third, pro, { categoryId: 'pest-control' });
+    await call('POST', `/jobs/${id}/rate`, { token: third.token, body: { rating: 4 } });
+    const flags = (await admin('GET', '/flags')).body;
+    const entry = flags.users.find((u) => u.id === pro.user.id);
+    assert.deepEqual([entry.role, entry.average, entry.count, entry.lowCount], ['provider', 3, 3, 1]);
+    assert.equal(entry.recent[0].rating, 4);
+    assert.equal(flags.threshold, 3.5);
+    assert.ok((await admin('GET', '/overview')).body.lowRatedUsers >= 1);
+    assert.equal((await admin('GET', `/providers/${pro.user.id}`)).body.ratingFlagged, true);
+
+    // Customers can be flagged too, from pros' ratings.
+    for (let i = 0; i < 3; i++) {
+      const p = await onlinePro(['pest-control']);
+      const jobId = await completedJob(rude, p, { categoryId: 'pest-control' });
+      await call('POST', `/jobs/${jobId}/rate`, { token: p.token, body: { rating: 2, comment: 'Abusive on site' } });
+    }
+    assert.ok((await flaggedIds()).includes(rude.user.id));
+    const detail = await admin('GET', `/jobs/${id}`);
+    assert.equal(detail.body.provider.flagged, true);
+    assert.equal(detail.body.customer.flagged, false);
+    assert.deepEqual(detail.body.jobReviews.map((r) => [r.reviewerRole, r.rating]), [['customer', 4]]);
+    assert.equal((await call('GET', '/admin/flags', { token: pro.token })).status, 403);
+  });
+
+  test('ratings from before two-way reviews are carried over', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'pronow-reviews-'));
+    const file = path.join(dir, 'old.db');
+    try {
+      const fresh = openDb(file);
+      fresh.exec(`DELETE FROM settings WHERE key = 'migration:reviews'; DROP TABLE reviews;`);
+      fresh.prepare("INSERT INTO users (role, name, email, password_hash) VALUES ('customer', 'C', 'c@x.com', 'x'), ('provider', 'P', 'p@x.com', 'x')").run();
+      fresh.prepare('INSERT INTO provider_profiles (user_id, rating_sum, rating_count) VALUES (2, 99, 20)').run();
+      fresh.prepare("INSERT INTO jobs (customer_id, provider_id, category_id, description, size, address, lat, lng, status, estimated_cents) VALUES (1, 2, 'plumbing', 'x', 'small', 'x', 0, 0, 'completed', 100)").run();
+      fresh.prepare("INSERT INTO ratings (job_id, rating, comment) VALUES (1, 4, 'Good')").run();
+      fresh.close();
+      const db2 = openDb(file);
+      assert.deepEqual({ ...db2.prepare('SELECT reviewer_id, reviewee_id, reviewer_role, rating, comment FROM reviews').get() },
+        { reviewer_id: 1, reviewee_id: 2, reviewer_role: 'customer', rating: 4, comment: 'Good' });
+      assert.deepEqual({ ...db2.prepare('SELECT rating_sum, rating_count FROM provider_profiles WHERE user_id = 2').get() }, { rating_sum: 4, rating_count: 1 });
+      db2.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

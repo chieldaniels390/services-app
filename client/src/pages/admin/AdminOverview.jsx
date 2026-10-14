@@ -6,6 +6,7 @@ export default function AdminOverview({ overview: o }) {
   const todo = [
     o.pendingVerifications > 0 && { to: '/admin/pros', icon: '🪪', text: `${o.pendingVerifications} pro${o.pendingVerifications > 1 ? 's' : ''} waiting for verification` },
     o.openDisputes > 0 && { to: '/admin/disputes', icon: '⚠️', text: `${o.openDisputes} open dispute${o.openDisputes > 1 ? 's' : ''}` },
+    o.lowRatedUsers > 0 && { to: '/admin/ratings', icon: '⭐', text: `${o.lowRatedUsers} ${o.lowRatedUsers > 1 ? 'users' : 'user'} rated below 3.5★` },
     o.payoutsNeedingAttention > 0 && { to: '/admin/jobs?status=completed', icon: '🏦', text: `${o.payoutsNeedingAttention} payout${o.payoutsNeedingAttention > 1 ? 's' : ''} failed or on hold` },
   ].filter(Boolean);
   return (

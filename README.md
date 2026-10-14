@@ -22,7 +22,7 @@ Customers get an upfront price and pay by card through **Paystack** when they bo
 - Approve and pay for any parts the pro added (charged to the saved card, or via a new checkout)
 - Report a problem (dispute) once the pro has arrived, up to 14 days after the job
 - See a **Verified** badge on their pro
-- Rate and review afterwards
+- Rate the pro (1-5 stars and an optional comment) after each job, and see a pro's **profile**: average rating, jobs completed, star breakdown and recent reviews
 - **My bookings:** job history with filters, downloadable **PDF invoices** (tax invoices with VAT when switched on), **Book again** (the same pro gets first refusal), **favourite pros**, and **repeat bookings** (weekly or monthly, e.g. garden or pool service) with skip, pause and stop
 
 **Pros**
@@ -37,6 +37,7 @@ Customers get an upfront price and pay by card through **Paystack** when they bo
 - Release a job you can't make – it goes straight back to other pros
 - Add a South African bank account and get paid automatically when a job is marked complete (job price minus the platform fee, plus parts in full)
 - Payouts page with transfer status and a retry button for failed transfers
+- Rate customers after each job, and see a customer's average rating (from other pros) on job requests
 - Earnings for today / 7 days / all time, rating, job history
 
 **Admin panel** (`/admin`)
@@ -114,6 +115,19 @@ Earnings are what the pro actually receives: their payouts, excluding any an adm
 - A scheduler in the server process books due visits and hands "book again" jobs to everyone when their window ends. It checks every minute and is safe to run more than once.
 
 All dates and times are shown and entered in `TIMEZONE`, so a visit booked for 09:00 is 09:00 in South Africa, whatever the device's clock says.
+
+## Ratings and reviews
+
+| Pro profile | Admin: low ratings |
+| --- | --- |
+| ![](docs/screenshots/pro-profile.png) | ![](docs/screenshots/admin-low-ratings.png) |
+
+Ratings go both ways. After a completed job, the customer rates the pro and the pro rates the customer: 1-5 stars plus an optional comment, once each, within `REVIEW_WINDOW_DAYS` (14).
+
+- **Reviews of pros are public** on the pro's profile (`/pros/:id`). The profile shows the average rating, number of reviews, jobs completed, a star breakdown and the latest reviews. Reviewers appear as first name and initial ("Naledi C."). Pros get a notification for each new review.
+- **Reviews of customers are private.** Pros only see a customer's average and count, on job requests and the job page, to help them decide. The comments are visible to admins only, and customers don't see what a pro wrote about them.
+- **Admin → Low ratings** lists everyone, pros and customers, averaging below `LOW_RATING_THRESHOLD` (3.5). It shows each person's latest reviews with links to the jobs. Someone needs at least `LOW_RATING_MIN_REVIEWS` (3) reviews before they can be flagged, so one bad review on a first job doesn't flag anyone. The count shows on the overview and the tab, and flags also appear on admin pro and job pages. A pro can be suspended from their admin page.
+- Ratings from before two-way reviews existed are carried over automatically.
 
 ## Notifications
 
@@ -274,6 +288,7 @@ server/src
   invoices.js    invoice issuing (frozen snapshots) and PDF rendering
   bookings.js    favourite pros and repeat bookings (+ the scheduler that books visits)
   platform.js    admin-editable business details and VAT settings
+  reviews.js     two-way ratings, pro profiles, low-rating flags
   sms/           SMS provider adapters (console, twilio, bulksms) - add your own here
   create-admin.js  CLI to create an admin account
   geocoder.js    address search / reverse lookup (Nominatim), throttled + cached
@@ -302,6 +317,7 @@ Demo accounts:
 | --- | --- |
 | admin@demo.com | Admin panel |
 | customer@demo.com | Customer |
+| difficult@demo.com | Customer with low ratings from pros (appears under Admin → Low ratings) |
 | plumber@demo.com | Plumbing, Aircon & Heating. Has five weeks of earnings history for the dashboard |
 | electrician@demo.com | Electrical, Appliances |
 | cleaner@demo.com | Cleaning |
@@ -328,6 +344,8 @@ npm start         # serves API + app on PORT (default 4000)
 | `DISPATCH_RADIUS_KM` | `30` | Service radius for pros who haven't set their own area |
 | `RECURRING_LEAD_HOURS` | `48` | How far ahead repeat visits are booked and charged |
 | `PREFERRED_PRO_WINDOW_MINUTES` / `..._SCHEDULED_MINUTES` | `5` / `60` | How long a "book again" pro has the job to themselves |
+| `REVIEW_WINDOW_DAYS` | `14` | How long after a job both sides can rate |
+| `LOW_RATING_THRESHOLD` / `LOW_RATING_MIN_REVIEWS` | `3.5` / `3` | Flag users averaging below this once they have this many reviews |
 | `MAX_SERVICE_RADIUS_KM` | `100` | Largest radius a pro can choose |
 | `UPLOAD_DIR` | `uploads` | Where verification documents are stored. Keep private and backed up |
 | `TOKEN_SECRET` | dev value | **Set this in production** |
@@ -361,6 +379,7 @@ npm test
 
 ## Roadmap
 
+- Hiding abusive reviews, and suspending customers, from the admin panel
 - Credit notes for refunds made after an invoice is issued
 - Cancellation fees once a pro is on the way; automatically expire unpaid bookings
 - Automatic ID and face matching through a verification provider

@@ -24,6 +24,12 @@ export const config = {
   preferredWindowScheduledMinutes: Number(process.env.PREFERRED_PRO_WINDOW_SCHEDULED_MINUTES ?? 60),
   // Repeat bookings: each visit is booked (and charged to the saved card) this long before it happens.
   recurringLeadHours: Number(process.env.RECURRING_LEAD_HOURS ?? 48),
+  reviews: {
+    windowDays: Number(process.env.REVIEW_WINDOW_DAYS ?? 14),
+    // Admins see a flag on anyone averaging below this, once they have at least minReviews reviews.
+    flagBelow: Number(process.env.LOW_RATING_THRESHOLD ?? 3.5),
+    minReviews: Number(process.env.LOW_RATING_MIN_REVIEWS ?? 3),
+  },
   // Working hours and "today / this week / this month" earnings use this time zone.
   timezone: process.env.TIMEZONE ?? 'Africa/Johannesburg',
   defaultCenter: {

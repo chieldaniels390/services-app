@@ -44,10 +44,9 @@ export default function CustomerHome() {
         if (job.provider) setPreferredPro({ id: job.provider.id, name: job.provider.name });
       }).catch((e) => setError(e.message));
     } else {
-      api('/favourites').then((list) => {
-        const fav = list.find((f) => f.id === Number(pro));
-        if (fav) setPreferredPro({ id: fav.id, name: fav.name });
-        setCategoryId(params.get('category') ?? fav?.categories[0] ?? null);
+      api(`/pros/${pro}`).then((p) => {
+        if (p.workedWithYou) setPreferredPro({ id: p.id, name: p.name });
+        setCategoryId(params.get('category') ?? p.trades[0] ?? null);
       }).catch((e) => setError(e.message));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

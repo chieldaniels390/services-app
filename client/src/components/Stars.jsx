@@ -1,5 +1,5 @@
-export function Stars({ value, count }) {
-  if (value == null) return <span className="muted small">New pro</span>;
+export function Stars({ value, count, empty = 'New pro' }) {
+  if (value == null) return <span className="muted small">{empty}</span>;
   return (
     <span className="stars small">
       ★ {value.toFixed(1)}

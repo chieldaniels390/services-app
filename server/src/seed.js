@@ -61,7 +61,7 @@ transaction(db, () => {
         verification_status, verification_submitted_at, verified_at, service_lat, service_lng, service_radius_km)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, ?, 25)`)
       .run(id, pro.bio, status === 'approved' ? 1 : 0, home.lat, home.lng,
-        status === 'approved' ? 4 * 20 + 18 + i : 0, status === 'approved' ? 20 : 0, status,
+        0, 0, status, // ratings come from the demo reviews below
         status === 'approved' ? new Date().toISOString() : null, home.lat, home.lng);
     addDemoDocuments(id);
     for (const c of pro.categories) {
@@ -110,8 +110,72 @@ if (!hasHistory) {
   });
 }
 
+// --- Demo reviews -----------------------------------------------------------
+// Real review rows (both directions), so pro profiles, customer ratings and the admin's low-rating flags have data.
+const CUSTOMER_COMMENTS = [
+  [5, 'Arrived on time, explained everything and left the place spotless.'],
+  [5, 'Fixed it in no time. Will definitely book again.'],
+  [4, 'Good work, a little later than the ETA but kept me updated.'],
+  [5, 'Very professional and friendly.'],
+  [5, ''],
+  [4, 'Solid job, fair price.'],
+  [5, 'Went the extra mile and checked the other taps too.'],
+];
+const PRO_COMMENTS = [[5, 'Clear instructions and easy access.'], [5, ''], [4, 'Friendly, paid for parts quickly.']];
+if (!db.prepare('SELECT 1 FROM reviews LIMIT 1').get()) {
+  const naledi = exists.get('customer@demo.com');
+  const addReview = db.prepare(`INSERT OR IGNORE INTO reviews (job_id, reviewer_id, reviewee_id, reviewer_role, rating, comment, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  // A few past jobs for each demo pro (the plumber already has his earnings history).
+  const pastJob = (customerId, proId, categoryId, daysAgo) => {
+    const done = new Date(Date.now() - daysAgo * 86400000).toISOString().replace('T', ' ').slice(0, 19);
+    const { lastInsertRowid } = db.prepare(`
+      INSERT INTO jobs (customer_id, provider_id, category_id, description, size, address, lat, lng, status, estimated_cents,
+        final_cents, platform_fee_cents, payout_cents, payment_status, fee_rate, created_at, accepted_at, completed_at)
+      VALUES (?, ?, ?, 'Demo job', 'small', 'Demo address, Johannesburg', ?, ?, 'completed', 50000, 50000, 7500, 42500, 'paid', 0.15, ?, ?, ?)`)
+      .run(customerId, proId, categoryId, lat, lng, done, done, done);
+    return { id: Number(lastInsertRowid), done };
+  };
+  transaction(db, () => {
+    for (const pro of PROS.filter((p) => !p.status && p.email !== 'plumber@demo.com')) {
+      const proId = exists.get(pro.email).id;
+      for (let k = 0; k < 4; k++) {
+        const job = pastJob(naledi.id, proId, pro.categories[k % pro.categories.length], 40 + k * 9);
+        const [rating, comment] = CUSTOMER_COMMENTS[(k + pro.email.length) % CUSTOMER_COMMENTS.length];
+        addReview.run(job.id, naledi.id, proId, 'customer', rating, comment, job.done);
+      }
+    }
+    // The plumber's history: most customers left a review, and he rated them back.
+    const history = db.prepare("SELECT id, completed_at FROM jobs WHERE provider_id = ? AND status = 'completed' ORDER BY id").all(plumber.id);
+    history.forEach((job, k) => {
+      if (k % 4 === 3) return;
+      const [rating, comment] = CUSTOMER_COMMENTS[k % CUSTOMER_COMMENTS.length];
+      addReview.run(job.id, customer.id, plumber.id, 'customer', rating, comment, job.completed_at);
+      const [proRating, proComment] = PRO_COMMENTS[k % PRO_COMMENTS.length];
+      addReview.run(job.id, plumber.id, customer.id, 'provider', proRating, proComment, job.completed_at);
+    });
+    // A customer pros have had trouble with, so the admin "Low ratings" list has someone on it.
+    if (!exists.get('difficult@demo.com')) {
+      insertUser.run('customer', 'Pat Difficult', 'difficult@demo.com', '+27 82 555 0199', hashPassword(PASSWORD));
+    }
+    const pat = exists.get('difficult@demo.com');
+    [['electrician@demo.com', 'electrical', 2, 'Refused to pay for parts that were agreed on site.'],
+      ['handyman@demo.com', 'handyman', 3, 'Kept changing the job once I arrived.'],
+      ['locksmith@demo.com', 'locksmith', 2, 'Rude and aggressive.']].forEach(([email, cat, rating, comment], k) => {
+      const proId = exists.get(email).id;
+      const job = pastJob(pat.id, proId, cat, 5 + k * 6);
+      addReview.run(job.id, proId, pat.id, 'provider', rating, comment, job.done);
+    });
+  });
+  // Pros' cached averages, from the reviews.
+  db.exec(`UPDATE provider_profiles SET
+    rating_sum = (SELECT COALESCE(SUM(rating), 0) FROM reviews WHERE reviewee_id = provider_profiles.user_id),
+    rating_count = (SELECT COUNT(*) FROM reviews WHERE reviewee_id = provider_profiles.user_id)`);
+}
+
 console.log(`Seeded demo accounts (password: ${PASSWORD}):`);
 console.log('  admin@demo.com     (admin panel)');
 console.log('  customer@demo.com');
+console.log('  difficult@demo.com (a customer with low ratings from pros)');
 for (const p of PROS) console.log(`  ${p.email}  (${p.categories.join(', ')})${p.status === 'pending' ? '  - awaiting verification' : ''}`);
 console.log('Demo accounts are for local testing only. Create real admins with: npm run create-admin -- you@example.com "Your Name"');

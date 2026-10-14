@@ -126,6 +126,16 @@ function FlagForm({ jobId, onDone }) {
   );
 }
 
+function RatingBadge({ person }) {
+  if (!person.ratingCount) return <span className="muted small">no ratings</span>;
+  return (
+    <>
+      <span className="stars small">★ {person.rating}</span> <span className="muted small">({person.ratingCount})</span>
+      {person.flagged && <span className="pill flag-pill">Low rating</span>}
+    </>
+  );
+}
+
 export default function AdminJob({ onChange }) {
   const id = Number(useParams().id);
   const [d, setD] = useState(null);
@@ -171,11 +181,15 @@ export default function AdminJob({ onChange }) {
           <section className="card">
             <h3>People</h3>
             <dl className="kv">
-              <dt>Customer</dt><dd>{d.customer.name}<br /><span className="muted small">{d.customer.email} · {d.customer.phone ?? 'no phone'}</span></dd>
+              <dt>Customer</dt>
+              <dd>
+                {d.customer.name} <RatingBadge person={d.customer} />
+                <br /><span className="muted small">{d.customer.email} · {d.customer.phone ?? 'no phone'}</span>
+              </dd>
               <dt>Pro</dt>
               <dd>
                 {d.provider ? (
-                  <><Link to={`/admin/pros/${d.provider.id}`}>{d.provider.name}</Link><br /><span className="muted small">{d.provider.email} · {d.provider.phone ?? 'no phone'}</span></>
+                  <><Link to={`/admin/pros/${d.provider.id}`}>{d.provider.name}</Link> <RatingBadge person={d.provider} /><br /><span className="muted small">{d.provider.email} · {d.provider.phone ?? 'no phone'}</span></>
                 ) : <span className="muted">Not assigned</span>}
               </dd>
             </dl>
@@ -241,6 +255,18 @@ export default function AdminJob({ onChange }) {
             ))}
             {!openDispute && <FlagForm jobId={id} onDone={update} />}
           </section>
+
+          {d.jobReviews.length > 0 && (
+            <section className="card">
+              <h3>Ratings on this job</h3>
+              {d.jobReviews.map((r) => (
+                <p key={r.reviewerRole}>
+                  <span className="muted small">{r.reviewerRole === 'customer' ? 'Customer → pro' : 'Pro → customer'}</span><br />
+                  <span className="stars">{'★'.repeat(r.rating)}{'☆'.repeat(5 - r.rating)}</span> {r.comment}
+                </p>
+              ))}
+            </section>
+          )}
 
           <section className="card">
             <h3>Text messages sent</h3>

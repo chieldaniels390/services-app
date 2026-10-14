@@ -112,6 +112,47 @@ function CompletedActions({ job, onError }) {
   );
 }
 
+const starsText = (n) => `${'★'.repeat(n)}${'☆'.repeat(5 - n)}`;
+
+/** Both sides rate each other after the job. Pros also see what the customer said about them. */
+function Reviews({ job, isPro, busy, onRate }) {
+  const [rating, setRating] = useState(0);
+  const [comment, setComment] = useState('');
+  const { mine, theirs, canReview } = job.reviews;
+  const other = isPro ? job.customer.name.split(' ')[0] : job.provider.name.split(' ')[0];
+  return (
+    <section className="card">
+      {canReview && (
+        <>
+          <h3>{isPro ? `How was ${other} to work for?` : `How did ${other} do?`}</h3>
+          <p className="muted small">
+            {isPro
+              ? "Only our team sees what you write. Other pros just see the customer's average rating."
+              : `Your rating and comment appear on ${other}'s profile with your first name.`}
+          </p>
+          <StarInput value={rating} onChange={setRating} />
+          <textarea rows={2} maxLength={500} placeholder="Add a comment (optional)" value={comment} onChange={(e) => setComment(e.target.value)} />
+          <button className="btn primary block" disabled={!rating || busy} onClick={() => onRate({ rating, comment })}>Submit rating</button>
+        </>
+      )}
+      {mine && (
+        <div className="review-line">
+          <h3>Your rating of {other}</h3>
+          <p className="stars" aria-label={`${mine.rating} out of 5`}>{starsText(mine.rating)}</p>
+          {mine.comment && <p className="muted">“{mine.comment}”</p>}
+        </div>
+      )}
+      {theirs && (
+        <div className="review-line">
+          <h3>{other}'s rating of you</h3>
+          <p className="stars" aria-label={`${theirs.rating} out of 5`}>{starsText(theirs.rating)}</p>
+          {theirs.comment && <p className="muted">“{theirs.comment}”</p>}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function JobPage() {
   const jobId = Number(useParams().id);
   const { user, socket } = useSession();
@@ -120,8 +161,6 @@ export default function JobPage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [materials, setMaterials] = useState('');
-  const [rating, setRating] = useState(0);
-  const [comment, setComment] = useState('');
   const [simulating, setSimulating] = useState(false);
   const [sharingGps, setSharingGps] = useState(false);
   const [params, setParams] = useSearchParams();
@@ -261,7 +300,7 @@ export default function JobPage() {
           <section className="card person">
             <div className="avatar">{job.provider.name[0]}</div>
             <div className="grow">
-              <strong>{job.provider.name}</strong>
+              <Link to={`/pros/${job.provider.id}`} className="person-name">{job.provider.name}</Link>
               {job.provider.verified && <span className="verified" title="ID and trade documents checked by ProNow">✓ Verified</span>}
               <div><Stars value={job.provider.rating} count={job.provider.ratingCount} /></div>
             </div>
@@ -274,6 +313,7 @@ export default function JobPage() {
             <div className="avatar">{job.customer.name[0]}</div>
             <div className="grow">
               <strong>{job.customer.name}</strong>
+              <div className="small"><Stars value={job.customer.rating} count={job.customer.ratingCount} empty="New customer" /></div>
               <div className="muted small">{job.address}</div>
             </div>
             {job.customer.phone && ASSIGNED.includes(job.status) && <a className="btn" href={`tel:${job.customer.phone}`}>📞</a>}
@@ -402,21 +442,8 @@ export default function JobPage() {
           </button>
         )}
 
-        {!isPro && job.status === 'completed' && !job.review && (
-          <section className="card">
-            <h3>How did {job.provider.name.split(' ')[0]} do?</h3>
-            <StarInput value={rating} onChange={setRating} />
-            <textarea rows={2} maxLength={500} placeholder="Add a comment (optional)" value={comment} onChange={(e) => setComment(e.target.value)} />
-            <button className="btn primary block" disabled={!rating || busy} onClick={() => act('/rate', { rating, comment })}>Submit rating</button>
-          </section>
-        )}
-
-        {job.review && (
-          <section className="card">
-            <h3>Rating</h3>
-            <p className="stars">{'★'.repeat(job.review.rating)}{'☆'.repeat(5 - job.review.rating)}</p>
-            {job.review.comment && <p className="muted">“{job.review.comment}”</p>}
-          </section>
+        {job.reviews && (job.reviews.canReview || job.reviews.mine || job.reviews.theirs) && (
+          <Reviews job={job} isPro={isPro} busy={busy} onRate={(body) => act('/rate', body)} />
         )}
 
         {!isPro && job.status === 'completed' && job.provider && (

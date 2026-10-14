@@ -85,7 +85,7 @@ function Favourites({ favourites, setFavourites }) {
       <div className="row">
         <div className="avatar">{p.name[0]}</div>
         <div className="grow">
-          <strong>{p.name}</strong>{p.verified && <span className="verified">✓ Verified</span>}
+          <Link to={`/pros/${p.id}`} className="person-name">{p.name}</Link>{p.verified && <span className="verified">✓ Verified</span>}
           <div><Stars value={p.rating} count={p.ratingCount} /></div>
           <div className="muted small">{p.jobsTogether} {p.jobsTogether === 1 ? 'job' : 'jobs'} together · last {when(p.lastJobAt)}</div>
         </div>

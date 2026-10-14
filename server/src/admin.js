@@ -20,6 +20,7 @@ export function createAdminService({ db, jobs, verification }) {
       collected7dCents: one("SELECT COALESCE(SUM(amount_cents - refunded_cents), 0) FROM payments WHERE status IN ('paid', 'refund_pending') AND paid_at >= datetime('now', '-7 days')"),
       fees7dCents: one("SELECT COALESCE(SUM(platform_fee_cents), 0) FROM jobs WHERE status = 'completed' AND completed_at >= datetime('now', '-7 days')"),
       payoutsNeedingAttention: one("SELECT COUNT(*) FROM payouts WHERE status IN ('failed', 'on_hold')"),
+      lowRatedUsers: jobs.reviews.flagged().length,
     };
   }
 
@@ -63,6 +64,8 @@ export function createAdminService({ db, jobs, verification }) {
       verification: verification.statusFor(id),
       payoutAccount: p.payout_recipient_code ? { bankName: p.payout_bank_name, last4: p.payout_account_last4, accountName: p.payout_account_name } : null,
       recentJobs: db.prepare(`${jobs.JOB_SELECT} WHERE j.provider_id = ? ORDER BY j.id DESC LIMIT 20`).all(id).map(jobSummary),
+      ratingFlagged: jobs.reviews.isFlagged(jobs.reviews.summary(id)),
+      reviews: jobs.reviews.receivedForAdmin(id, 10),
     };
   }
 
@@ -95,8 +98,14 @@ export function createAdminService({ db, jobs, verification }) {
   function jobDetail(admin, id) {
     const row = jobs.getJobRow(id);
     if (!row) throw notFound('Job not found');
-    const customer = db.prepare('SELECT id, name, email, phone FROM users WHERE id = ?').get(row.customer_id);
-    const provider = row.provider_id && db.prepare('SELECT id, name, email, phone FROM users WHERE id = ?').get(row.provider_id);
+    // Each person with their rating, and a flag if it has dropped below the threshold.
+    const person = (userId) => {
+      const u = db.prepare('SELECT id, name, email, phone FROM users WHERE id = ?').get(userId);
+      const rating = jobs.reviews.summary(userId);
+      return { ...u, ...rating, flagged: jobs.reviews.isFlagged(rating) };
+    };
+    const customer = person(row.customer_id);
+    const provider = row.provider_id && person(row.provider_id);
     return {
       job: { ...jobs.toDto(row, admin), payoutCents: row.payout_cents, platformFeeCents: row.platform_fee_cents, feeRate: row.fee_rate },
       customer,
@@ -117,6 +126,8 @@ export function createAdminService({ db, jobs, verification }) {
         FROM disputes d JOIN users u ON u.id = d.opened_by LEFT JOIN users a ON a.id = d.resolved_by
         WHERE d.job_id = ? ORDER BY d.id DESC`).all(id).map((d) => ({ ...d, reasonLabel: DISPUTE_REASONS[d.reason] })),
       messages: jobs.messages(admin, id),
+      jobReviews: db.prepare(`
+        SELECT reviewer_role AS reviewerRole, rating, comment, created_at AS createdAt FROM reviews WHERE job_id = ? ORDER BY id`).all(id),
       sms: db.prepare(`
         SELECT s.id, s.type, s.to_number AS toNumber, s.body, s.provider, s.status, s.error, s.created_at AS createdAt, u.name AS userName
         FROM sms_messages s JOIN users u ON u.id = s.user_id WHERE s.job_id = ? ORDER BY s.id`).all(id),

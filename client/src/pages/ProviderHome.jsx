@@ -128,6 +128,7 @@ export default function ProviderHome() {
             {profile.serviceArea ? `Within ${profile.serviceArea.radiusKm} km` : `Within ${config.defaultRadiusKm} km of you`}
             {' · '}{profile.workingHours ? `Today ${hoursToday}` : 'Any time'}
             {' · '}<Link to="/work">Work settings</Link>
+            {' · '}<Link to={`/pros/${user.id}`}>My profile</Link>
           </p>
         </div>
         <button className={`toggle ${profile.online ? 'on' : ''}`} onClick={() => (profile.online ? updateStatus({ online: false }) : goOnline())} aria-pressed={profile.online}>
@@ -192,6 +193,7 @@ export default function ProviderHome() {
                 <div className="muted small">
                   {j.distanceKm} km · ~{j.etaMinutes} min away{j.scheduledFor ? ` · ${when(j.scheduledFor)}` : ' · ASAP'}
                 </div>
+                <div className="small">{j.customer.name.split(' ')[0]} · <Stars value={j.customer.rating} count={j.customer.ratingCount} empty="New customer" /></div>
               </div>
               <strong className="earn">{money(j.payoutCents)}</strong>
             </div>

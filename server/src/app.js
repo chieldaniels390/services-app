@@ -76,6 +76,7 @@ export function createApp({
   function profileOf(fullUser) {
     const { sms_enabled: smsEnabled, ...rest } = fullUser;
     const user = { ...rest, smsEnabled: smsEnabled !== 0 };
+    if (user.role === 'customer') return { ...user, ...jobs.reviews.summary(user.id) };
     if (user.role !== 'provider') return user;
     const p = db.prepare('SELECT * FROM provider_profiles WHERE user_id = ?').get(user.id);
     const settings = providers.settingsFor(user.id);
@@ -315,7 +316,9 @@ export function createApp({
   api.post('/recurring/:id/skip', auth('customer'), (req, res) => res.json(bookings.skipNext(req.user, jobId(req))));
   api.get('/jobs/:id', auth(), (req, res) => res.json(jobs.getForUser(req.user, jobId(req))));
   api.post('/jobs/:id/cancel', auth(), async (req, res) => res.json(await jobs.cancel(req.user, jobId(req))));
-  api.post('/jobs/:id/rate', auth('customer'), (req, res) => res.json(jobs.rate(req.user, jobId(req), req.body ?? {})));
+  // Both sides rate each other after a job.
+  api.post('/jobs/:id/rate', auth(), (req, res) => res.json(jobs.rate(req.user, jobId(req), req.body ?? {})));
+  api.get('/pros/:id', auth(), (req, res) => res.json(jobs.reviews.providerProfile(jobId(req), req.user.id)));
   api.get('/jobs/:id/messages', auth(), (req, res) => res.json(jobs.messages(req.user, jobId(req))));
   api.post('/jobs/:id/messages', auth(), (req, res) => res.status(201).json(jobs.sendMessage(req.user, jobId(req), req.body?.body)));
 
@@ -408,6 +411,7 @@ export function createApp({
 
   adminApi.get('/overview', (_req, res) => res.json(admin.overview()));
   adminApi.get('/settings', (_req, res) => res.json(platform.get()));
+  adminApi.get('/flags', (_req, res) => res.json({ threshold: config.reviews.flagBelow, minReviews: config.reviews.minReviews, users: jobs.reviews.flagged() }));
   adminApi.put('/settings', (req, res) => res.json(platform.update(req.body ?? {})));
   adminApi.get('/providers', (req, res) => res.json(admin.listProviders({ status: req.query.status, q: req.query.q })));
   adminApi.get('/providers/:id', (req, res) => res.json(admin.providerDetail(idParam(req))));

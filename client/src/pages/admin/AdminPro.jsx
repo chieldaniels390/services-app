@@ -77,7 +77,9 @@ export default function AdminPro({ onChange }) {
             {' · '}{pro.workingHours ? hoursSummary(pro.workingHours) : 'Any time'}
           </p>
           {pro.bio && <p className="muted">“{pro.bio}”</p>}
-          {v.status === 'approved' && <Stars value={pro.rating} count={pro.ratingCount} />}
+          {pro.ratingCount > 0 && <Stars value={pro.rating} count={pro.ratingCount} />}
+          {pro.ratingFlagged && <span className="pill flag-pill">Low rating</span>}
+          {' '}<Link to={`/pros/${pro.id}`} className="small">Public profile ›</Link>
         </div>
       </section>
 
@@ -139,6 +141,20 @@ export default function AdminPro({ onChange }) {
             </div>
           </div>
         )}
+      </section>
+
+      <section className="card">
+        <h3>Recent reviews</h3>
+        {pro.reviews.length === 0 && <p className="muted">No reviews yet.</p>}
+        <ul className="review-list compact">
+          {pro.reviews.map((r) => (
+            <li key={`${r.jobId}-${r.reviewerId}`}>
+              <span className="stars">{'★'.repeat(r.rating)}{'☆'.repeat(5 - r.rating)}</span>{' '}
+              <span className="small">{r.comment || <span className="muted">No comment</span>}</span>
+              <span className="muted small"> · {r.reviewer}, <Link to={`/admin/jobs/${r.jobId}`}>job #{r.jobId}</Link></span>
+            </li>
+          ))}
+        </ul>
       </section>
 
       <section className="card">

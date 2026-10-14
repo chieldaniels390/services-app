@@ -4,6 +4,7 @@ import { HttpError, badRequest, conflict, forbidden, notFound } from './errors.j
 import { distanceKm, etaMinutes } from './geo.js';
 import { DISPUTE_REASONS, createDisputeService } from './disputes.js';
 import { createPaymentService } from './payments.js';
+import { createReviewService } from './reviews.js';
 import { isWithinHours } from './time.js';
 import { JOB_SIZES, quote, settle, surgeMultiplier } from './pricing.js';
 
@@ -24,14 +25,12 @@ const JOB_SELECT = `
     pu.name AS provider_name, pu.phone AS provider_phone,
     pp.lat AS provider_lat, pp.lng AS provider_lng,
     pp.rating_sum AS provider_rating_sum, pp.rating_count AS provider_rating_count,
-    pp.verification_status AS provider_verification,
-    r.rating, r.comment AS rating_comment
+    pp.verification_status AS provider_verification
   FROM jobs j
   JOIN categories c ON c.id = j.category_id
   JOIN users cu ON cu.id = j.customer_id
   LEFT JOIN users pu ON pu.id = j.provider_id
-  LEFT JOIN provider_profiles pp ON pp.user_id = j.provider_id
-  LEFT JOIN ratings r ON r.job_id = j.id`;
+  LEFT JOIN provider_profiles pp ON pp.user_id = j.provider_id`;
 
 export const ratingOf = (sum, count) => (count ? Math.round((sum / count) * 10) / 10 : null);
 
@@ -81,6 +80,7 @@ export function createJobService({
       notifier.notify(job.customer_id, 'refund_issued', { job, amountCents });
     },
   });
+  const reviews = createReviewService({ db, notifier, notifyAdmins, now });
   const disputes = createDisputeService({
     db, payments, notifyAdmins, onJobChanged: (id) => notifyParties(getJobRow(id)),
     onOpened: (jobId, openedBy) => {
@@ -141,6 +141,8 @@ export function createJobService({
       customer: {
         name: row.customer_name,
         phone: viewer.id === row.provider_id ? row.customer_phone : undefined,
+        // Pros (and admins) see how other pros have rated this customer.
+        ...(isProvider || viewer.role === 'admin' ? reviews.summary(row.customer_id) : {}),
       },
       provider: row.provider_id
         ? {
@@ -153,7 +155,6 @@ export function createJobService({
             verified: row.provider_verification === 'approved',
           }
         : null,
-      review: row.rating ? { rating: row.rating, comment: row.rating_comment } : null,
       cancelledBy: row.cancelled_by,
       createdAt: row.created_at,
       acceptedAt: row.accepted_at,
@@ -176,6 +177,7 @@ export function createJobService({
       const name = db.prepare('SELECT name FROM users WHERE id = ?').get(row.preferred_provider_id)?.name;
       dto.preferredProvider = { id: row.preferred_provider_id, name, reservedUntil: reservedFor(row) ? row.preferred_until : null };
     }
+    if (involved && viewer.role !== 'admin') dto.reviews = reviews.forJob(viewer, row);
     if (involved) {
       dto.recurringId = row.recurring_id;
       dto.hasInvoice = row.status === 'completed' && row.payment_status !== 'unpaid';
@@ -490,20 +492,11 @@ export function createJobService({
     throw forbidden();
   }
 
-  function rate(customer, id, { rating, comment = '' }) {
-    const row = requireJob(id);
-    if (row.customer_id !== customer.id) throw forbidden();
-    if (row.status !== 'completed') throw conflict('You can rate a job once it is completed');
-    if (!Number.isInteger(rating) || rating < 1 || rating > 5) throw badRequest('Rating must be 1-5 stars');
-    if (row.rating) throw conflict('You have already rated this job');
-    transaction(db, () => {
-      db.prepare('INSERT INTO ratings (job_id, rating, comment) VALUES (?, ?, ?)').run(id, rating, String(comment).slice(0, 500));
-      db.prepare('UPDATE provider_profiles SET rating_sum = rating_sum + ?, rating_count = rating_count + 1 WHERE user_id = ?')
-        .run(rating, row.provider_id);
-    });
+  function rate(user, id, input) {
+    reviews.submit(user, id, input);
     const updated = getJobRow(id);
     notifyParties(updated);
-    return toDto(updated, customer);
+    return toDto(updated, user);
   }
 
   function messages(user, id) {
@@ -543,7 +536,7 @@ export function createJobService({
   return {
     estimate, create, listForUser, getForUser, openRequestsFor, accept, advance, cancel, rate,
     messages, sendMessage, relayLocation, payBooking, confirmPayment, payMaterials, payments,
-    disputes, toDto, getJobRow, JOB_SELECT, releaseExpiredPreferences, preferredInfo, checkPreferred,
+    disputes, reviews, toDto, getJobRow, JOB_SELECT, releaseExpiredPreferences, preferredInfo, checkPreferred,
   };
 }
 
