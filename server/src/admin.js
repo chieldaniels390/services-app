@@ -21,6 +21,7 @@ export function createAdminService({ db, jobs, verification }) {
       fees7dCents: one("SELECT COALESCE(SUM(platform_fee_cents), 0) FROM jobs WHERE status = 'completed' AND completed_at >= datetime('now', '-7 days')"),
       payoutsNeedingAttention: one("SELECT COUNT(*) FROM payouts WHERE status IN ('failed', 'on_hold')"),
       lowRatedUsers: jobs.reviews.flagged().length,
+      openEmergencies: one("SELECT COUNT(*) FROM emergency_alerts WHERE status IN ('open', 'acknowledged')"),
     };
   }
 

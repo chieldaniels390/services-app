@@ -83,7 +83,7 @@ export function createReviewService({ db, notifier, notifyAdmins, now = () => ne
   /** A pro's public profile: rating, completed jobs and recent reviews. */
   function providerProfile(proId, viewerId = null) {
     const pro = db.prepare(`
-      SELECT u.id, u.name, u.created_at AS memberSince, p.bio, p.verification_status AS status
+      SELECT u.id, u.name, u.created_at AS memberSince, p.bio, p.verification_status AS status, p.photo_file
       FROM users u JOIN provider_profiles p ON p.user_id = u.id WHERE u.id = ? AND u.role = 'provider'`).get(proId);
     if (!pro) throw notFound('Pro not found');
     const breakdown = Object.fromEntries([5, 4, 3, 2, 1].map((n) => [n, 0]));
@@ -93,6 +93,7 @@ export function createReviewService({ db, notifier, notifyAdmins, now = () => ne
       name: pro.name,
       bio: pro.bio,
       verified: pro.status === 'approved',
+      hasPhoto: Boolean(pro.photo_file),
       memberSince: pro.memberSince,
       trades: db.prepare("SELECT category_id FROM provider_categories WHERE user_id = ? AND status = 'approved'").all(proId).map((r) => r.category_id),
       completedJobs: db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE provider_id = ? AND status = 'completed'").get(proId).n,

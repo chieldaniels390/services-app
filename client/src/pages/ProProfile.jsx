@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api.js';
 import { when } from '../format.js';
 import { useSession } from '../session.jsx';
+import ProPhoto from '../components/ProPhoto.jsx';
 
 const starsText = (n) => `${'★'.repeat(n)}${'☆'.repeat(5 - n)}`;
 const memberSince = (v) => new Date(`${v.replace(' ', 'T')}Z`).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
@@ -24,7 +25,7 @@ export default function ProProfile() {
     <div className="pro-profile">
       <button className="link back" onClick={() => navigate(-1)}>‹ Back</button>
       <section className="card profile-head">
-        <div className="avatar lg">{pro.name[0]}</div>
+        <ProPhoto userId={pro.id} hasPhoto={pro.hasPhoto} name={pro.name} size={72} />
         <div className="grow">
           <h2>{pro.name} {pro.verified && <span className="verified">✓ Verified</span>}</h2>
           <p className="small">{pro.trades.map((t) => `${trade(t)?.icon} ${trade(t)?.name}`).join(' · ')}</p>

@@ -3,6 +3,8 @@ import { Link, useParams } from 'react-router-dom';
 import { api, downloadFile } from '../../api.js';
 import { PAYOUT_LABELS, STATUS_LABELS, money, timeOnly, when } from '../../format.js';
 import { useSession, useSocketEvent } from '../../session.jsx';
+import { AlertCard } from './AdminSafety.jsx';
+import { vehicleText } from '../../components/ProPhoto.jsx';
 
 const PAYMENT_LABELS = { pending: 'Not paid', paid: 'Paid', refund_pending: 'Refund pending', refunded: 'Refunded', failed: 'Failed', refund_failed: 'Refund failed' };
 // Same states as the pro sees, worded for an admin.
@@ -140,9 +142,14 @@ export default function AdminJob({ onChange }) {
   const id = Number(useParams().id);
   const [d, setD] = useState(null);
   const [error, setError] = useState('');
-  const load = useCallback(() => api(`/admin/jobs/${id}`).then(setD).catch((e) => setError(e.message)), [id]);
+  const [alerts, setAlerts] = useState([]);
+  const load = useCallback(() => {
+    api(`/admin/jobs/${id}/emergencies`).then(setAlerts).catch(() => {});
+    return api(`/admin/jobs/${id}`).then(setD).catch((e) => setError(e.message));
+  }, [id]);
   useEffect(() => { load(); }, [load]);
   useSocketEvent('admin:updated', (e) => e.jobId === id && load());
+  useSocketEvent('admin:emergency', (e) => e.jobId === id && load());
 
   if (!d) return <p className={error ? 'error' : 'muted'}>{error || 'Loading…'}</p>;
   const { job } = d;
@@ -176,6 +183,8 @@ export default function AdminJob({ onChange }) {
         <p className="muted small">{timeline.map(([label, t]) => `${label} ${when(t)}`).join(' → ')}</p>
       </section>
 
+      {alerts.map((a) => <AlertCard key={a.id} alert={a} onChange={() => { load(); onChange(); }} />)}
+
       <div className="admin-columns">
         <div>
           <section className="card">
@@ -189,7 +198,8 @@ export default function AdminJob({ onChange }) {
               <dt>Pro</dt>
               <dd>
                 {d.provider ? (
-                  <><Link to={`/admin/pros/${d.provider.id}`}>{d.provider.name}</Link> <RatingBadge person={d.provider} /><br /><span className="muted small">{d.provider.email} · {d.provider.phone ?? 'no phone'}</span></>
+                  <><Link to={`/admin/pros/${d.provider.id}`}>{d.provider.name}</Link> <RatingBadge person={d.provider} /><br /><span className="muted small">{d.provider.email} · {d.provider.phone ?? 'no phone'}</span>
+                  {job.provider?.vehicle && <><br /><span className="small">🚐 {vehicleText(job.provider.vehicle)}</span></>}</>
                 ) : <span className="muted">Not assigned</span>}
               </dd>
             </dl>

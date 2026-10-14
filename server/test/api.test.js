@@ -1315,6 +1315,168 @@ describe('two-way ratings', () => {
   });
 });
 
+async function publicGet(path) {
+  const res = await fetch(`${base}/api${path}`);
+  return { status: res.status, type: res.headers.get('content-type'), cache: res.headers.get('cache-control'), body: res.headers.get('content-type')?.includes('json') ? await res.json() : await res.arrayBuffer() };
+}
+
+describe('share my job', () => {
+  test('family can follow the pro until the job ends, without seeing private details', async () => {
+    const customer = await register('customer', { phone: '0821112222' });
+    const pro = await onlinePro(['electrical']);
+    await upload(pro.token, 'id', solidPng()); // a verification upload must never become the public photo
+    const photo = await fetch(`${base}/api/provider/photo`, {
+      method: 'PUT', headers: { authorization: `Bearer ${pro.token}`, 'content-type': 'image/png' }, body: solidPng(40, 40, [1, 2, 3]),
+    });
+    assert.equal(photo.status, 200);
+    const vehicle = await call('PUT', '/provider/vehicle', { token: pro.token, body: { vehicle: { make: 'Toyota', model: 'Hilux', colour: 'White', plate: 'ca 123-456' } } });
+    assert.deepEqual(vehicle.body.vehicle, { make: 'Toyota', model: 'Hilux', colour: 'White', plate: 'CA 123-456' });
+
+    const { id } = await book(customer, { categoryId: 'electrical', address: '7 Secret Street' });
+    assert.equal((await call('POST', `/jobs/${id}/share`, { token: pro.token })).status, 403, 'only the customer shares');
+    const shared = await call('POST', `/jobs/${id}/share`, { token: customer.token });
+    assert.equal(shared.status, 201);
+    const token = shared.body.url.split('/track/')[1];
+    assert.ok(token.length >= 32);
+    assert.equal((await call('GET', `/jobs/${id}`, { token: customer.token })).body.shareLinks, 1);
+
+    let view = await publicGet(`/share/${token}`);
+    assert.equal(view.status, 200);
+    assert.equal(view.cache, 'no-store');
+    assert.equal(view.body.provider, null, 'no pro yet');
+    assert.equal(view.body.customerFirstName, customer.user.name.split(' ')[0]);
+
+    await call('POST', `/jobs/${id}/accept`, { token: pro.token });
+    await call('POST', `/jobs/${id}/status`, { token: pro.token, body: { status: 'en_route' } });
+    view = await publicGet(`/share/${token}`);
+    assert.equal(view.body.provider.name, pro.user.name);
+    assert.deepEqual(view.body.provider.vehicle, { make: 'Toyota', model: 'Hilux', colour: 'White', plate: 'CA 123-456' });
+    assert.equal(view.body.provider.hasPhoto, true);
+    assert.ok(view.body.providerLocation);
+    assert.ok(view.body.etaMinutes >= 1);
+    assert.deepEqual(view.body.emergencyNumbers.map((n) => n.number), ['10111', '112']);
+    const raw = JSON.stringify(view.body);
+    assert.ok(!raw.includes('Secret Street') && !raw.includes('0821112222') && !raw.includes(customer.user.email), 'no address, phone or email');
+
+    // Live position follows the pro.
+    const sock = await new Promise((resolve) => { const s = connect(base, { auth: { token: pro.token }, transports: ['websocket'] }); s.on('connect', () => resolve(s)); });
+    sock.emit('location', { lat: -26.15, lng: 28.01 });
+    await new Promise((r) => setTimeout(r, 150));
+    sock.close();
+    assert.deepEqual((await publicGet(`/share/${token}`)).body.providerLocation, { lat: -26.15, lng: 28.01 });
+
+    const pic = await publicGet(`/share/${token}/photo`);
+    assert.equal(pic.status, 200);
+    assert.equal(pic.type, 'image/png');
+    assert.equal(Buffer.from(pic.body).length, solidPng(40, 40, [1, 2, 3]).length, 'the profile photo, not the ID upload');
+
+    // Once the job ends, the link only says so.
+    for (const status of ['arrived', 'in_progress', 'completed']) await call('POST', `/jobs/${id}/status`, { token: pro.token, body: { status } });
+    view = await publicGet(`/share/${token}`);
+    assert.equal(view.body.ended, true);
+    assert.equal(view.body.provider, undefined);
+    assert.equal(view.body.providerLocation, undefined);
+    assert.equal((await publicGet(`/share/${token}/photo`)).status, 404);
+    assert.equal((await call('POST', `/jobs/${id}/share`, { token: customer.token })).status, 409, 'nothing to share after the job');
+  });
+
+  test('stopping sharing kills every link; bad tokens get nothing', async () => {
+    const customer = await register('customer');
+    const { id } = await book(customer);
+    const a = (await call('POST', `/jobs/${id}/share`, { token: customer.token })).body.url.split('/track/')[1];
+    const b = (await call('POST', `/jobs/${id}/share`, { token: customer.token })).body.url.split('/track/')[1];
+    assert.equal((await publicGet(`/share/${a}`)).status, 200);
+    assert.equal((await call('DELETE', `/jobs/${id}/share`, { token: customer.token })).body.activeLinks, 0);
+    assert.equal((await publicGet(`/share/${a}`)).status, 404);
+    assert.equal((await publicGet(`/share/${b}`)).status, 404);
+    assert.equal((await publicGet('/share/not-a-real-token')).status, 404);
+    assert.equal((await call('DELETE', `/jobs/${id}/share`, { token: (await register('customer')).token })).status, 403);
+  });
+
+  test('photo and vehicle are validated', async () => {
+    const pro = await onlinePro();
+    const bad = await fetch(`${base}/api/provider/photo`, { method: 'PUT', headers: { authorization: `Bearer ${pro.token}`, 'content-type': 'image/png' }, body: Buffer.from('%PDF-1.4 not a photo at all') });
+    assert.equal(bad.status, 400);
+    assert.equal((await call('PUT', '/provider/vehicle', { token: pro.token, body: { vehicle: { make: 'VW', plate: '!' } } })).status, 400);
+    assert.equal((await call('PUT', '/provider/vehicle', { token: pro.token, body: { vehicle: { make: '', plate: 'ND 12345' } } })).status, 400);
+    assert.equal((await call('PUT', '/provider/vehicle', { token: pro.token, body: { vehicle: null } })).body.vehicle, null);
+  });
+});
+
+describe('emergency button', () => {
+  test('customer or pro can raise an alert; admins are told with the job details', async () => {
+    const { customer, pro, id } = await jobInProgress();
+    const outsider = await register('customer');
+    assert.equal((await call('POST', `/jobs/${id}/emergency`, { token: outsider.token })).status, 403);
+
+    const raised = await call('POST', `/jobs/${id}/emergency`, { token: customer.token, body: {} });
+    assert.equal(raised.status, 201);
+    assert.equal(raised.body.status, 'open');
+    assert.equal(raised.body.role, 'customer');
+    // Pressing again doesn't create a second alert; location can follow.
+    const again = await call('POST', `/jobs/${id}/emergency`, { token: customer.token, body: { lat: -26.2, lng: 28.04 } });
+    assert.equal(again.body.id, raised.body.id);
+    assert.deepEqual(again.body.location, { lat: -26.2, lng: 28.04 });
+    assert.equal((await call('GET', `/jobs/${id}`, { token: customer.token })).body.myEmergency.id, raised.body.id);
+
+    await notifier.idle();
+    const adminNote = (await call('GET', '/notifications', { token: adminToken })).body.items.find((n) => n.type === 'emergency_alert' && n.jobId === id);
+    assert.match(adminNote.title, new RegExp(`EMERGENCY on job #${id}`));
+    assert.equal(adminNote.url, `/admin/jobs/${id}`);
+    const list = (await admin('GET', '/emergencies?status=open')).body;
+    const entry = list.find((a) => a.id === raised.body.id);
+    assert.equal(entry.raisedBy.name, customer.user.name);
+    assert.equal(entry.provider.name, pro.user.name);
+    assert.ok(entry.customer.phone !== undefined && entry.job.address);
+    assert.ok((await admin('GET', '/overview')).body.openEmergencies >= 1);
+
+    // The pro can raise one too.
+    assert.equal((await call('POST', `/jobs/${id}/emergency`, { token: pro.token, body: { note: 'Threatened on site' } })).body.role, 'provider');
+
+    // Handling.
+    assert.equal((await admin('POST', `/emergencies/${raised.body.id}`, { status: 'resolved' })).status, 400, 'note required');
+    assert.equal((await admin('POST', `/emergencies/${raised.body.id}`, { status: 'acknowledged' })).body.status, 'acknowledged');
+    const resolved = await admin('POST', `/emergencies/${raised.body.id}`, { status: 'resolved', note: 'Called customer, police attended' });
+    assert.equal(resolved.body.status, 'resolved');
+    assert.equal((await call('POST', `/emergencies/${raised.body.id}`, { token: customer.token })).status, 404);
+  });
+
+  test('cancelling a false alarm, and when the button is available', async () => {
+    const { customer, pro, id } = await jobInProgress();
+    const alert = (await call('POST', `/jobs/${id}/emergency`, { token: pro.token })).body;
+    assert.equal((await call('PATCH', `/emergencies/${alert.id}`, { token: customer.token, body: { cancel: true } })).status, 403, 'only the person who raised it');
+    assert.equal((await call('PATCH', `/emergencies/${alert.id}`, { token: pro.token, body: { cancel: true } })).body.status, 'false_alarm');
+
+    const fresh = await register('customer');
+    const { id: unassigned } = await book(fresh);
+    assert.equal((await call('POST', `/jobs/${unassigned}/emergency`, { token: fresh.token })).status, 409, 'no pro yet');
+
+    await call('POST', `/jobs/${id}/status`, { token: pro.token, body: { status: 'completed' } });
+    assert.equal((await call('POST', `/jobs/${id}/emergency`, { token: customer.token })).status, 201, 'still available just after the job');
+    try {
+      clockTime = new Date(Date.now() + 2 * 3600000).toISOString();
+      assert.equal((await call('POST', `/jobs/${id}/emergency`, { token: pro.token })).status, 409);
+    } finally {
+      clockTime = null;
+    }
+  });
+
+  test('the on-call safety number gets an SMS', async () => {
+    const { config } = await import('../src/config.js');
+    const before = sentSms.length;
+    config.safety.alertPhone = '082 999 0000';
+    try {
+      const { customer, id } = await jobInProgress();
+      await call('POST', `/jobs/${id}/emergency`, { token: customer.token });
+      await notifier.idle();
+      const text = sentSms.slice(before).find((m) => m.to === '+27829990000');
+      assert.match(text.body, new RegExp(`emergency button on job #${id}`));
+    } finally {
+      config.safety.alertPhone = '';
+    }
+  });
+});
+
 describe('address search', () => {
   test('proxies search and reverse lookups for signed-in users', async () => {
     const { token } = await register('customer');

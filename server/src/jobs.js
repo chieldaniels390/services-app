@@ -25,7 +25,8 @@ const JOB_SELECT = `
     pu.name AS provider_name, pu.phone AS provider_phone,
     pp.lat AS provider_lat, pp.lng AS provider_lng,
     pp.rating_sum AS provider_rating_sum, pp.rating_count AS provider_rating_count,
-    pp.verification_status AS provider_verification
+    pp.verification_status AS provider_verification, pp.photo_file AS provider_photo,
+    pp.vehicle_make, pp.vehicle_model, pp.vehicle_colour, pp.vehicle_plate
   FROM jobs j
   JOIN categories c ON c.id = j.category_id
   JOIN users cu ON cu.id = j.customer_id
@@ -153,6 +154,11 @@ export function createJobService({
             ratingCount: row.provider_rating_count,
             location: trackProvider ? { lat: row.provider_lat, lng: row.provider_lng } : null,
             verified: row.provider_verification === 'approved',
+            hasPhoto: Boolean(row.provider_photo),
+            // So the customer knows who and what to expect at the door.
+            vehicle: involved && (row.vehicle_plate || row.vehicle_make)
+              ? { make: row.vehicle_make, model: row.vehicle_model, colour: row.vehicle_colour, plate: row.vehicle_plate }
+              : undefined,
           }
         : null,
       cancelledBy: row.cancelled_by,

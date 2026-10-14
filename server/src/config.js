@@ -24,6 +24,17 @@ export const config = {
   preferredWindowScheduledMinutes: Number(process.env.PREFERRED_PRO_WINDOW_SCHEDULED_MINUTES ?? 60),
   // Repeat bookings: each visit is booked (and charged to the saved card) this long before it happens.
   recurringLeadHours: Number(process.env.RECURRING_LEAD_HOURS ?? 48),
+  safety: {
+    // Shown on the emergency sheet and share pages. South Africa: SAPS 10111; 112 works from any mobile.
+    emergencyNumbers: [
+      { number: '10111', label: 'Police (SAPS)' },
+      { number: '112', label: 'Emergency services from any mobile' },
+    ],
+    // Optional on-call number that gets an SMS for every emergency alert (e.g. +27821234567).
+    alertPhone: process.env.SAFETY_ALERT_PHONE ?? '',
+    // The emergency button stays available this long after a job is completed.
+    afterJobMinutes: Number(process.env.EMERGENCY_AFTER_JOB_MINUTES ?? 60),
+  },
   reviews: {
     windowDays: Number(process.env.REVIEW_WINDOW_DAYS ?? 14),
     // Admins see a flag on anyone averaging below this, once they have at least minReviews reviews.

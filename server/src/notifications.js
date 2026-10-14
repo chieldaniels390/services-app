@@ -125,6 +125,14 @@ export const TEMPLATES = {
     url: `/pros/${job.provider_id}`,
     channels: { inApp: true, push: true },
   }),
+  emergency_alert: ({ job, raisedBy, role }) => ({
+    title: `EMERGENCY on job #${job.id}`,
+    body: `${raisedBy} (${role === 'customer' ? 'customer' : 'pro'}) pressed the emergency button. ${job.category_name}, ${job.address}.`,
+    url: `/admin/jobs/${job.id}`,
+    tag: `emergency-${job.id}`,
+    sms: `ProNow EMERGENCY: ${raisedBy} (${role === 'customer' ? 'customer' : 'pro'}) pressed the emergency button on job #${job.id}.`,
+    channels: { inApp: true, push: true, sms: true },
+  }),
   dispute_opened: ({ job }) => ({
     title: `A problem was reported on job #${job.id}`,
     body: 'Our team is looking into it and will be in touch.',
@@ -169,6 +177,19 @@ export function createNotifier({ db, emit, push, sms, appUrl, defaultCountryCode
     if (n.channels.sms && sms) track(sendSms(userId, n.sms, jobId, type));
   }
 
+  /** Texts a number that doesn't belong to a user (e.g. the safety team's on-call phone). */
+  function smsTo(number, body) {
+    const to = toE164(number, defaultCountryCode);
+    if (!sms || !to) return;
+    track((async () => {
+      try {
+        await sms.send({ to, body });
+      } catch (err) {
+        console.error(`SMS to ${to} failed:`, err.message);
+      }
+    })());
+  }
+
   async function sendSms(userId, body, jobId, type) {
     const user = db.prepare('SELECT phone, sms_enabled FROM users WHERE id = ?').get(userId);
     const to = toE164(user?.phone, defaultCountryCode);
@@ -204,5 +225,5 @@ export function createNotifier({ db, emit, push, sms, appUrl, defaultCountryCode
     return list(userId);
   }
 
-  return { notify, list, markRead, idle: () => Promise.all([...inFlight]) };
+  return { notify, smsTo, list, markRead, idle: () => Promise.all([...inFlight]) };
 }

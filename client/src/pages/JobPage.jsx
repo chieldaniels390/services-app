@@ -6,6 +6,8 @@ import { api } from '../api.js';
 import Chat from '../components/Chat.jsx';
 import PushPrompt from '../components/PushPrompt.jsx';
 import ReportProblem from '../components/ReportProblem.jsx';
+import EmergencyButton from '../components/EmergencySheet.jsx';
+import ProPhoto, { vehicleText } from '../components/ProPhoto.jsx';
 import MapView from '../components/MapView.jsx';
 import StatusTimeline from '../components/StatusTimeline.jsx';
 import { StarInput, Stars } from '../components/Stars.jsx';
@@ -153,6 +155,55 @@ function Reviews({ job, isPro, busy, onRate }) {
   );
 }
 
+const ACTIVE_FOR_SHARE = ['requested', 'accepted', 'en_route', 'arrived', 'in_progress'];
+// Matches the server: the emergency button stays for an hour after the job.
+const recentlyCompleted = (job) => job.status === 'completed' && job.completedAt
+  && Date.now() - new Date(`${job.completedAt.replace(' ', 'T')}Z`).getTime() < 60 * 60000;
+
+/** "Share my job": a live link for family. Uses the phone's share sheet where there is one. */
+function ShareJob({ job, onChange }) {
+  const [link, setLink] = useState('');
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function share() {
+    setBusy(true);
+    setMessage('');
+    try {
+      const { url } = await api(`/jobs/${job.id}/share`, { method: 'POST' });
+      setLink(url);
+      onChange();
+      const text = `Follow my ${job.category.name.toLowerCase()} job live on ProNow: who's coming, their vehicle and where they are.`;
+      if (navigator.share) {
+        await navigator.share({ title: 'My ProNow job', text, url }).catch(() => {});
+      } else {
+        await navigator.clipboard?.writeText(url).then(() => setMessage('Link copied. Paste it into a message to family.')).catch(() => {});
+      }
+    } catch (e) {
+      setMessage(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function stop() {
+    await api(`/jobs/${job.id}/share`, { method: 'DELETE' });
+    setLink('');
+    setMessage('Sharing stopped. Any links you sent no longer work.');
+    onChange();
+  }
+
+  return (
+    <div className="share-job">
+      <button className="btn" disabled={busy} onClick={share}>🔗 Share my job</button>
+      {job.shareLinks > 0 && <button className="link small" onClick={stop}>Stop sharing</button>}
+      {link && <input className="share-link" readOnly value={link} onFocus={(e) => e.target.select()} aria-label="Share link" />}
+      {message && <p className="muted small">{message}</p>}
+      {job.shareLinks > 0 && !link && !message && <p className="muted small">Shared with {job.shareLinks} link{job.shareLinks > 1 ? 's' : ''}. Links stop working when the job ends.</p>}
+    </div>
+  );
+}
+
 export default function JobPage() {
   const jobId = Number(useParams().id);
   const { user, socket } = useSession();
@@ -279,6 +330,12 @@ export default function JobPage() {
           )}
           {isPro && job.askedForYou && job.status === 'requested' && <p className="notice">⭐ This customer asked for you by name.</p>}
           {eta != null && <p className="eta">Arriving in about <strong>{eta} min</strong></p>}
+          {(mine || !isPro) && (ASSIGNED.includes(job.status) || job.myEmergency || recentlyCompleted(job)) && (
+            <div className="safety-row">
+              {!isPro && ACTIVE_FOR_SHARE.includes(job.status) && <ShareJob job={job} onChange={load} />}
+              <EmergencyButton job={job} onChange={load} />
+            </div>
+          )}
           {job.status === 'awaiting_payment' ? (
             <>
               <p className="muted">Your request goes out to nearby pros as soon as your payment clears. We hold it until the job is done.</p>
@@ -298,11 +355,12 @@ export default function JobPage() {
 
         {!isPro && job.provider && (
           <section className="card person">
-            <div className="avatar">{job.provider.name[0]}</div>
+            <ProPhoto userId={job.provider.id} hasPhoto={job.provider.hasPhoto} name={job.provider.name} size={56} />
             <div className="grow">
               <Link to={`/pros/${job.provider.id}`} className="person-name">{job.provider.name}</Link>
               {job.provider.verified && <span className="verified" title="ID and trade documents checked by ProNow">✓ Verified</span>}
               <div><Stars value={job.provider.rating} count={job.provider.ratingCount} /></div>
+              {job.provider.vehicle && ASSIGNED.includes(job.status) && <div className="vehicle small">🚐 {vehicleText(job.provider.vehicle)}</div>}
             </div>
             {job.provider.phone && ASSIGNED.includes(job.status) && <a className="btn" href={`tel:${job.provider.phone}`}>📞 Call</a>}
           </section>

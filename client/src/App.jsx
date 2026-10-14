@@ -14,6 +14,7 @@ import WorkSettings from './pages/WorkSettings.jsx';
 import Verification from './pages/Verification.jsx';
 import Settings from './pages/Settings.jsx';
 import ProProfile from './pages/ProProfile.jsx';
+import Track from './pages/Track.jsx';
 import Bell from './components/Bell.jsx';
 
 
@@ -68,6 +69,7 @@ export default function App() {
     return (
       <Shell>
         <Routes>
+          <Route path="/track/:token" element={<Track />} />
           <Route path="/admin/*" element={<Suspense fallback={<p className="muted">Loading…</p>}><AdminLayout /></Suspense>} />
           <Route path="*" element={<Navigate to="/admin" replace />} />
         </Routes>
@@ -87,6 +89,7 @@ export default function App() {
         <Route path="/payouts" element={user?.role === 'provider' ? <Payouts /> : <Navigate to="/" replace />} />
         <Route path="/earnings" element={user?.role === 'provider' ? <Earnings /> : <Navigate to="/" replace />} />
         <Route path="/work" element={user?.role === 'provider' ? <WorkSettings /> : <Navigate to="/" replace />} />
+        <Route path="/track/:token" element={<Track />} />
         <Route path="/pros/:id" element={<RequireUser><ProProfile /></RequireUser>} />
         <Route path="/settings" element={<RequireUser><Settings /></RequireUser>} />
         <Route path="/verification" element={user?.role === 'provider' ? <Verification /> : <Navigate to="/" replace />} />

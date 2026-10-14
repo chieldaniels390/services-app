@@ -16,7 +16,9 @@ Customers get an upfront price and pay by card through **Paystack** when they bo
 - Choose a service, **search for an address** (the pin jumps to it), tap the map or use GPS (the address fills in), describe the problem, pick job size and ASAP or a scheduled time
 - Upfront price: call-out fee + hourly labour × estimated hours, with **demand-based surge** when requests outnumber available pros
 - See how many pros are nearby and their ETA before booking
-- Live status (requested → accepted → on the way → arrived → in progress → completed) with the pro's position moving on the map
+- Live status (requested → accepted → on the way → arrived → in progress → completed) with the pro's position moving on the map, and the pro's photo and vehicle (make, colour, registration)
+- **Share my job:** a live link for family showing the pro, their vehicle and position until the job ends
+- **Emergency button** (customers and pros): shows 10111 / 112 and alerts the ProNow safety team with the job details
 - In-app chat and click-to-call with the assigned pro
 - Pay by card with Paystack at booking. The money is held until the job is done, and cancelling before work starts refunds it in full
 - Approve and pay for any parts the pro added (charged to the saved card, or via a new checkout)
@@ -128,6 +130,26 @@ Ratings go both ways. After a completed job, the customer rates the pro and the 
 - **Reviews of customers are private.** Pros only see a customer's average and count, on job requests and the job page, to help them decide. The comments are visible to admins only, and customers don't see what a pro wrote about them.
 - **Admin → Low ratings** lists everyone, pros and customers, averaging below `LOW_RATING_THRESHOLD` (3.5). It shows each person's latest reviews with links to the jobs. Someone needs at least `LOW_RATING_MIN_REVIEWS` (3) reviews before they can be flagged, so one bad review on a first job doesn't flag anyone. The count shows on the overview and the tab, and flags also appear on admin pro and job pages. A pro can be suspended from their admin page.
 - Ratings from before two-way reviews existed are carried over automatically.
+
+## Safety
+
+| Family's view of a shared job | Emergency button | Admin: safety alerts |
+| --- | --- | --- |
+| ![](docs/screenshots/share-track.png) | ![](docs/screenshots/emergency.png) | ![](docs/screenshots/admin-safety.png) |
+
+**Share my job.** From the job page the customer taps *Share my job*. On phones this opens the share sheet (WhatsApp, SMS…); elsewhere the link is copied. Anyone with the link can open `/track/<token>` without signing in. The page shows the pro's name, photo, rating and vehicle (colour, make, model, registration), the job status and ETA, a live map of the pro's position (refreshed every 5 seconds) and the emergency numbers.
+- **What it never shows:** the street address, phone numbers or emails.
+- **When it stops:** as soon as the job is completed or cancelled, the link shows only "This job has ended". *Stop sharing* disables every link straight away.
+- **Storage:** links are long random tokens, and only a hash of each is stored.
+
+**Pro photo and vehicle.** Pros add these under *Work settings*. The photo is a profile picture, separate from the ID-verification selfie, which is never shown to customers or on share links. Customers see the photo and vehicle on the job page once a pro accepts.
+
+**Emergency button.** Shown to the customer and the assigned pro while a job is under way, and for an hour after it's completed (`EMERGENCY_AFTER_JOB_MINUTES`). One tap:
+1. **Alerts the safety team immediately,** with no confirmation step, because speed matters. Admins get an in-app notification, a push and a red banner across the admin panel, plus an SMS to `SAFETY_ALERT_PHONE` if set.
+2. **Shows tap-to-call buttons** for **10111** (SAPS) and **112** (any mobile).
+3. **Adds the person's location** if their phone shares it, and lets them add a note. They can also cancel ("I'm safe") if it was pressed by accident.
+
+Pressing again updates the open alert rather than creating another. **Admin → Safety** lists alerts with both people's phone numbers, the job, the reporter's location (open in maps) and notes. You can mark an alert *being handled*, *resolved* or *false alarm*, and each job's page shows its alerts.
 
 ## Notifications
 
@@ -289,6 +311,7 @@ server/src
   bookings.js    favourite pros and repeat bookings (+ the scheduler that books visits)
   platform.js    admin-editable business details and VAT settings
   reviews.js     two-way ratings, pro profiles, low-rating flags
+  safety.js      share-my-job links and emergency alerts
   sms/           SMS provider adapters (console, twilio, bulksms) - add your own here
   create-admin.js  CLI to create an admin account
   geocoder.js    address search / reverse lookup (Nominatim), throttled + cached
@@ -344,6 +367,8 @@ npm start         # serves API + app on PORT (default 4000)
 | `DISPATCH_RADIUS_KM` | `30` | Service radius for pros who haven't set their own area |
 | `RECURRING_LEAD_HOURS` | `48` | How far ahead repeat visits are booked and charged |
 | `PREFERRED_PRO_WINDOW_MINUTES` / `..._SCHEDULED_MINUTES` | `5` / `60` | How long a "book again" pro has the job to themselves |
+| `SAFETY_ALERT_PHONE` | – | On-call number that gets an SMS for every emergency alert |
+| `EMERGENCY_AFTER_JOB_MINUTES` | `60` | How long after a job the emergency button stays available |
 | `REVIEW_WINDOW_DAYS` | `14` | How long after a job both sides can rate |
 | `LOW_RATING_THRESHOLD` / `LOW_RATING_MIN_REVIEWS` | `3.5` / `3` | Flag users averaging below this once they have this many reviews |
 | `MAX_SERVICE_RADIUS_KM` | `100` | Largest radius a pro can choose |

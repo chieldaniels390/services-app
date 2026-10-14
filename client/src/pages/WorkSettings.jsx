@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api } from '../api.js';
+import { api, apiUpload } from '../api.js';
+import ProPhoto from '../components/ProPhoto.jsx';
 import MapView, { circleBounds } from '../components/MapView.jsx';
 import { useSession } from '../session.jsx';
 
@@ -158,6 +159,56 @@ function ServiceArea({ settings, onSaved }) {
   );
 }
 
+function ProfileAndVehicle({ settings, onSaved }) {
+  const { user } = useSession();
+  const [vehicle, setVehicle] = useState(settings.vehicle ?? { make: '', model: '', colour: '', plate: '' });
+  const [noVehicle, setNoVehicle] = useState(false);
+  const [photoKey, setPhotoKey] = useState(0);
+  const [photoError, setPhotoError] = useState('');
+  const [state, save] = useSaver(onSaved);
+  const field = (key) => ({ value: vehicle[key] ?? '', onChange: (e) => setVehicle({ ...vehicle, [key]: e.target.value }) });
+
+  async function uploadPhoto(file) {
+    if (!file) return;
+    setPhotoError('');
+    try {
+      onSaved(await apiUpload('/provider/photo', file));
+      setPhotoKey((k) => k + 1);
+    } catch (e) {
+      setPhotoError(e.message);
+    }
+  }
+
+  return (
+    <section className="card">
+      <h3>Profile photo and vehicle</h3>
+      <p className="muted small">Customers (and family they share the job with) see these, so they know who to expect at the door.</p>
+      <div className="row photo-row">
+        <ProPhoto key={photoKey} userId={user.id} hasPhoto={settings.hasPhoto} name={user.name} size={72} />
+        <label className="btn upload-btn">
+          {settings.hasPhoto ? 'Change photo' : '📷 Add a photo'}
+          <input type="file" accept="image/*" hidden onChange={(e) => { uploadPhoto(e.target.files?.[0]); e.target.value = ''; }} />
+        </label>
+      </div>
+      <p className="hint">A clear, friendly photo of your face. This is separate from the selfie you used for verification, which stays private.</p>
+      {photoError && <p className="error small">{photoError}</p>}
+
+      <label className="radio"><input type="checkbox" checked={noVehicle} onChange={(e) => setNoVehicle(e.target.checked)} /> I don't use a vehicle for jobs</label>
+      {!noVehicle && (
+        <div className="vehicle-grid">
+          <label>Make<input placeholder="Toyota" maxLength={30} {...field('make')} /></label>
+          <label>Model<input placeholder="Hilux" maxLength={30} {...field('model')} /></label>
+          <label>Colour<input placeholder="White" maxLength={20} {...field('colour')} /></label>
+          <label>Registration<input placeholder="CA 123-456" maxLength={12} autoCapitalize="characters" {...field('plate')} /></label>
+        </div>
+      )}
+      {state.error && <p className="error small">{state.error}</p>}
+      {state.saved && <p className="saved small">Saved</p>}
+      <button className="btn primary" disabled={state.busy} onClick={() => save('/provider/vehicle', { vehicle: noVehicle ? null : vehicle })}>Save vehicle</button>
+    </section>
+  );
+}
+
 export default function WorkSettings() {
   const { setUser } = useSession();
   const [settings, setSettings] = useState(null);
@@ -173,6 +224,7 @@ export default function WorkSettings() {
     <div className="work-settings">
       <Link to="/" className="back-link">‹ Dashboard</Link>
       <h2>Work settings</h2>
+      <ProfileAndVehicle settings={settings} onSaved={onSaved} />
       <Trades settings={settings} onSaved={onSaved} />
       <Hours settings={settings} onSaved={onSaved} />
       <ServiceArea settings={settings} onSaved={onSaved} />

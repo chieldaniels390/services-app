@@ -16,7 +16,8 @@ import { DISPUTE_REASONS } from './disputes.js';
 import { createNotifier } from './notifications.js';
 import { createPaystack } from './paystack.js';
 import { toE164 } from './phone.js';
-import { createProviderService } from './providers.js';
+import { MAX_PHOTO_BYTES, createProviderService } from './providers.js';
+import { createSafetyService } from './safety.js';
 import { createPushService } from './push.js';
 import { createEarningsService } from './earnings.js';
 import { createBookingService } from './bookings.js';
@@ -51,7 +52,8 @@ export function createApp({
     db, emit: notify, push, sms: smsProvider, appUrl: config.appUrl, defaultCountryCode: config.sms.defaultCountryCode,
   });
   const jobs = createJobService({ db, notify, paystack, notifyAdmins, notifier, now });
-  const providers = createProviderService({ db, notify, notifyAdmins, notifier, now });
+  const providers = createProviderService({ db, notify, notifyAdmins, notifier, uploadDir, now });
+  const safety = createSafetyService({ db, jobs, notifier, notifyAdmins, now });
   const earnings = createEarningsService({ db, now });
   const platform = createPlatformSettings({ db });
   const invoices = createInvoiceService({ db, platform });
@@ -168,6 +170,7 @@ export function createApp({
     defaultRadiusKm: config.dispatchRadiusKm,
     recurringLeadHours: config.recurringLeadHours,
     timezone: config.timezone,
+    emergencyNumbers: config.safety.emergencyNumbers,
     sms: { enabled: Boolean(smsProvider) },
   }));
 
@@ -294,6 +297,31 @@ export function createApp({
 
   api.get('/jobs', auth(), (req, res) => res.json(jobs.listForUser(req.user)));
 
+  // --- Safety: share my job, emergency button --------------------------------
+
+  api.post('/jobs/:id/share', auth('customer'), (req, res) => res.status(201).json(safety.createShare(req.user, jobId(req))));
+  api.delete('/jobs/:id/share', auth('customer'), (req, res) => res.json(safety.revokeShares(req.user, jobId(req))));
+  // Public: anyone with the link (no sign-in). Never cached, so a revoked or ended link stops working at once.
+  api.get('/share/:token', (req, res) => {
+    res.set('cache-control', 'no-store');
+    res.json(safety.viewShare(req.params.token));
+  });
+  api.get('/share/:token/photo', (req, res) => {
+    res.set({ 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+    res.sendFile(providers.photoFile(safety.sharePhotoOwner(req.params.token)));
+  });
+  api.post('/jobs/:id/emergency', auth(), (req, res) => res.status(201).json(safety.raise(req.user, jobId(req), req.body ?? {})));
+  api.patch('/emergencies/:id', auth(), (req, res) => res.json(safety.updateAlert(req.user, jobId(req), req.body ?? {})));
+
+  // Pro photos: visible to signed-in users (customers see their pro; profiles are public in the app).
+  api.get('/users/:id/photo', auth(), (req, res) => {
+    res.set({ 'cache-control': 'private, max-age=300', 'x-content-type-options': 'nosniff' });
+    res.sendFile(providers.photoFile(jobId(req)));
+  });
+  api.put('/provider/photo', auth('provider'), express.raw({ type: () => true, limit: MAX_PHOTO_BYTES }),
+    async (req, res) => res.json(await providers.setPhoto(req.user.id, req.body)));
+  api.put('/provider/vehicle', auth('provider'), (req, res) => res.json(providers.setVehicle(req.user.id, req.body?.vehicle ?? null)));
+
   // --- Invoices, favourites and repeat bookings ------------------------------
 
   api.get('/jobs/:id/invoice', auth(), (req, res) => res.json(invoices.forViewer(req.user, jobId(req))));
@@ -314,7 +342,14 @@ export function createApp({
   api.post('/recurring', auth('customer'), async (req, res) => res.status(201).json(await bookings.createRecurring(req.user, req.body ?? {})));
   api.patch('/recurring/:id', auth('customer'), (req, res) => res.json(bookings.setRecurringStatus(req.user, jobId(req), req.body?.status)));
   api.post('/recurring/:id/skip', auth('customer'), (req, res) => res.json(bookings.skipNext(req.user, jobId(req))));
-  api.get('/jobs/:id', auth(), (req, res) => res.json(jobs.getForUser(req.user, jobId(req))));
+  api.get('/jobs/:id', auth(), (req, res) => {
+    const job = jobs.getForUser(req.user, jobId(req));
+    if (req.user.role !== 'admin') {
+      job.myEmergency = safety.openAlertFor(req.user, job.id);
+      if (req.user.role === 'customer') job.shareLinks = safety.activeShares(job.id);
+    }
+    res.json(job);
+  });
   api.post('/jobs/:id/cancel', auth(), async (req, res) => res.json(await jobs.cancel(req.user, jobId(req))));
   // Both sides rate each other after a job.
   api.post('/jobs/:id/rate', auth(), (req, res) => res.json(jobs.rate(req.user, jobId(req), req.body ?? {})));
@@ -411,6 +446,8 @@ export function createApp({
 
   adminApi.get('/overview', (_req, res) => res.json(admin.overview()));
   adminApi.get('/settings', (_req, res) => res.json(platform.get()));
+  adminApi.get('/emergencies', (req, res) => res.json(safety.listAlerts({ status: req.query.status })));
+  adminApi.post('/emergencies/:id', (req, res) => res.json(safety.handleAlert(req.user, idParam(req), req.body ?? {})));
   adminApi.get('/flags', (_req, res) => res.json({ threshold: config.reviews.flagBelow, minReviews: config.reviews.minReviews, users: jobs.reviews.flagged() }));
   adminApi.put('/settings', (req, res) => res.json(platform.update(req.body ?? {})));
   adminApi.get('/providers', (req, res) => res.json(admin.listProviders({ status: req.query.status, q: req.query.q })));
@@ -440,6 +477,7 @@ export function createApp({
     const dispute = await disputes.resolve(req.user, idParam(req), req.body ?? {});
     res.json(admin.jobDetail(req.user, dispute.job_id));
   });
+  adminApi.get('/jobs/:id/emergencies', (req, res) => res.json(safety.alertsForJob(idParam(req))));
 
   api.use((_req, _res, next) => next(new HttpError(404, 'Not found')));
 

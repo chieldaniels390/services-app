@@ -17,6 +17,14 @@ const PROS = [
   // Waiting in the admin review queue, so the verification flow can be tried straight away.
   { name: 'Bongani Zulu', email: 'newpro@demo.com', categories: ['plumbing', 'handyman'], bio: 'Qualified plumber, new to ProNow.', status: 'pending' },
 ];
+// Vehicles customers (and family following a shared job) see.
+const VEHICLES = {
+  'plumber@demo.com': ['Toyota', 'Hilux', 'White', 'GP 482-917'],
+  'electrician@demo.com': ['Nissan', 'NP200', 'Silver', 'CA 219-334'],
+  'cleaner@demo.com': ['Suzuki', 'Swift', 'Red', 'GP 77 KLM'],
+  'locksmith@demo.com': ['Ford', 'Ranger', 'Blue', 'ND 55102'],
+  'handyman@demo.com': ['Volkswagen', 'Caddy', 'White', 'GP 310-221'],
+};
 const DOC_COLOURS = { id: [70, 110, 190], certificate: [60, 150, 90], selfie: [210, 150, 90] };
 
 const docsDir = path.resolve(config.uploadDir, 'documents');
@@ -64,6 +72,10 @@ transaction(db, () => {
         0, 0, status, // ratings come from the demo reviews below
         status === 'approved' ? new Date().toISOString() : null, home.lat, home.lng);
     addDemoDocuments(id);
+    if (VEHICLES[pro.email]) {
+      db.prepare('UPDATE provider_profiles SET vehicle_make = ?, vehicle_model = ?, vehicle_colour = ?, vehicle_plate = ? WHERE user_id = ?')
+        .run(...VEHICLES[pro.email], id);
+    }
     for (const c of pro.categories) {
       db.prepare('INSERT INTO provider_categories (user_id, category_id, status) VALUES (?, ?, ?)')
         .run(id, c, status === 'approved' ? 'approved' : 'pending');

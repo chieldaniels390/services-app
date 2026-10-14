@@ -518,3 +518,38 @@ label.radio input { width: auto; }
 .pill.flag-pill { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); margin-left: 0.3rem; }
 .pill.role-provider { background: var(--brand-soft); color: var(--brand-strong); }
 .pill.role-customer { background: var(--bg); color: var(--muted); }
+
+/* Safety: share my job, emergency button, tracking page */
+.avatar.photo { object-fit: cover; padding: 0; background: var(--bg); }
+.vehicle { margin-top: 0.2rem; font-weight: 600; }
+.safety-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-start; margin-top: 0.75rem; }
+.share-job { display: flex; flex-wrap: wrap; gap: 0.4rem 0.6rem; align-items: center; flex: 1; min-width: 12rem; }
+.share-job p { flex-basis: 100%; margin: 0; }
+.share-link { font-size: 0.8rem; padding: 0.4rem 0.6rem; flex-basis: 100%; }
+.btn.sos { background: #b91c1c; border-color: #b91c1c; color: #fff; font-weight: 800; }
+.btn.sos:hover:not(:disabled) { background: #991b1b; border-color: #991b1b; }
+.sheet-backdrop { position: fixed; inset: 0; z-index: 3000; background: rgb(0 0 0 / 55%); display: flex; align-items: flex-end; justify-content: center; }
+@media (min-width: 640px) { .sheet-backdrop { align-items: center; } }
+.sheet { width: min(480px, 100%); max-height: 92vh; overflow-y: auto; background: var(--surface); border-radius: 18px 18px 0 0; padding: 1.25rem; box-shadow: 0 -10px 40px rgb(0 0 0 / 30%); }
+@media (min-width: 640px) { .sheet { border-radius: 18px; } }
+.sheet.emergency h2 { color: #b91c1c; }
+.sos-numbers { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin: 0.5rem 0 1rem; }
+.btn.sos-call { flex-direction: column; align-items: flex-start; white-space: normal; text-align: left; border-color: #b91c1c; padding: 0.75rem; }
+.btn.sos-call strong { font-size: 1.35rem; color: #b91c1c; }
+.btn.sos-call span { font-size: 0.8rem; font-weight: 500; color: var(--muted); }
+.sos-status { background: color-mix(in srgb, var(--success) 10%, var(--surface)); border-radius: 12px; padding: 0.75rem; }
+.sos-status.cancelled { background: var(--bg); }
+.sos-status textarea { margin: 0.5rem 0; }
+.sheet .close { display: block; margin: 1rem auto 0; }
+.track { display: flex; flex-direction: column; gap: 0.75rem; max-width: 560px; margin: 0 auto; }
+.track-map { height: 340px; }
+.photo-row { gap: 1rem; margin: 0.5rem 0; }
+.vehicle-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 0.75rem; margin-top: 0.75rem; }
+.emergency-banner { display: flex; justify-content: space-between; gap: 1rem; background: #b91c1c; color: #fff; font-weight: 800; padding: 0.75rem 1rem; border-radius: 12px; margin-bottom: 0.75rem; text-decoration: none; animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 6px rgb(185 28 28 / 25%); } }
+@media (prefers-reduced-motion: reduce) { .emergency-banner { animation: none; } }
+.alert-card { display: flex; flex-direction: column; gap: 0.4rem; border-left: 5px solid #b91c1c; }
+.alert-card.resolved, .alert-card.false_alarm { border-left-color: var(--border); }
+.pill.alert-open { background: #b91c1c; color: #fff; }
+.pill.alert-acknowledged { background: #fde68a; color: #78350f; }
+.pill.alert-resolved { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }

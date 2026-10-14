@@ -248,6 +248,34 @@ CREATE TABLE IF NOT EXISTS reviews (
 );
 CREATE INDEX IF NOT EXISTS reviews_reviewee ON reviews (reviewee_id, id);
 
+-- "Share my job" links. Only a hash of the token is stored, so a database leak doesn't expose live links.
+CREATE TABLE IF NOT EXISTS job_shares (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id),
+  token_hash TEXT NOT NULL UNIQUE,
+  created_by INTEGER NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS job_shares_job ON job_shares (job_id);
+
+-- Emergency button presses during a job.
+CREATE TABLE IF NOT EXISTS emergency_alerts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id),
+  raised_by INTEGER NOT NULL REFERENCES users(id),
+  role TEXT NOT NULL,
+  lat REAL,
+  lng REAL,
+  note TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'acknowledged', 'resolved', 'false_alarm')),
+  handled_by INTEGER REFERENCES users(id),
+  handled_note TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS emergency_alerts_status ON emergency_alerts (status, id);
+
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -284,6 +312,12 @@ const ADDED_COLUMNS = [
   ['jobs', 'preferred_until', 'TEXT'],
   ['jobs', 'preferred_released', 'INTEGER NOT NULL DEFAULT 0'],
   ['jobs', 'recurring_id', 'INTEGER REFERENCES recurring_bookings(id)'],
+  // Shown to the customer (and on share links) so they know who and what to expect at the door.
+  ['provider_profiles', 'photo_file', 'TEXT'],
+  ['provider_profiles', 'vehicle_make', 'TEXT'],
+  ['provider_profiles', 'vehicle_model', 'TEXT'],
+  ['provider_profiles', 'vehicle_colour', 'TEXT'],
+  ['provider_profiles', 'vehicle_plate', 'TEXT'],
 ];
 
 /**
