@@ -4,13 +4,16 @@ import { BrowserRouter } from 'react-router-dom';
 import 'leaflet/dist/leaflet.css';
 import './styles.css';
 import App from './App.jsx';
+import { NotificationsProvider } from './notifications.jsx';
 import { SessionProvider } from './session.jsx';
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <BrowserRouter>
       <SessionProvider>
-        <App />
+        <NotificationsProvider>
+          <App />
+        </NotificationsProvider>
       </SessionProvider>
     </BrowserRouter>
   </StrictMode>,

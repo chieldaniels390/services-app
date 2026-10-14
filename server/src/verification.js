@@ -28,7 +28,7 @@ export function sniffType(buf) {
  * Pros upload an ID, a trade certificate/licence and a selfie, then submit them for review.
  * Status: unsubmitted -> pending -> approved | rejected. Rejected pros can re-upload and resubmit.
  */
-export function createVerificationService({ db, uploadDir, notify, notifyAdmins }) {
+export function createVerificationService({ db, uploadDir, notify, notifyAdmins, notifier = { notify: () => {} } }) {
   const dir = path.resolve(uploadDir, 'documents');
   mkdirSync(dir, { recursive: true });
 
@@ -111,6 +111,7 @@ export function createVerificationService({ db, uploadDir, notify, notifyAdmins 
       throw badRequest('Decision must be approve or reject');
     }
     notify(userId, 'verification:updated', statusFor(userId));
+    notifier.notify(userId, decision === 'approve' ? 'verification_approved' : 'verification_rejected', { note: note?.trim() });
     notifyAdmins('admin:updated', { type: 'verification', userId });
     return statusFor(userId);
   }

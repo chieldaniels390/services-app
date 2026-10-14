@@ -156,6 +156,50 @@ CREATE TABLE IF NOT EXISTS disputes (
   resolved_at TEXT
 );
 CREATE INDEX IF NOT EXISTS disputes_job ON disputes (job_id);
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL DEFAULT '/',
+  job_id INTEGER REFERENCES jobs(id),
+  read_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS notifications_user ON notifications (user_id, id);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  user_agent TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Every SMS attempt, so delivery problems and costs can be checked.
+CREATE TABLE IF NOT EXISTS sms_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  job_id INTEGER REFERENCES jobs(id),
+  type TEXT NOT NULL,
+  to_number TEXT NOT NULL,
+  body TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  provider_message_id TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS sms_messages_job ON sms_messages (job_id);
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS won't add them to an existing database.
@@ -174,6 +218,7 @@ const ADDED_COLUMNS = [
   ['provider_profiles', 'verified_at', 'TEXT'],
   ['provider_profiles', 'verified_by', 'INTEGER'],
   ['payments', 'refunded_cents', 'INTEGER NOT NULL DEFAULT 0'],
+  ['users', 'sms_enabled', 'INTEGER NOT NULL DEFAULT 1'],
 ];
 
 /**

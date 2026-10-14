@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { io } from 'socket.io-client';
 import { api, getToken, storeToken } from './api.js';
 import { setMoneyFormat } from './format.js';
+import { detachPushSubscription, registerServiceWorker, syncPushSubscription } from './push.js';
 
 const SessionContext = createContext(null);
 
@@ -23,7 +24,13 @@ export function SessionProvider({ children }) {
       .catch(console.error);
   }, []);
 
-  const signOut = useCallback(() => {
+  useEffect(() => {
+    registerServiceWorker();
+  }, []);
+
+  const signOut = useCallback(async () => {
+    // Unlink this browser first, while we still have the token, so the next person here doesn't get our pushes.
+    await detachPushSubscription();
     storeToken(null);
     setToken(null);
     setUser(null);
@@ -32,7 +39,10 @@ export function SessionProvider({ children }) {
   useEffect(() => {
     if (!token) return;
     api('/me')
-      .then(setUser)
+      .then((u) => {
+        setUser(u);
+        syncPushSubscription();
+      })
       .catch((err) => err.status === 401 && signOut())
       .finally(() => setReady(true));
   }, [token, signOut]);

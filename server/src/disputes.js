@@ -11,7 +11,7 @@ export const DISPUTE_REASONS = {
 };
 const DISPUTE_WINDOW_DAYS = 14;
 
-export function createDisputeService({ db, payments, onJobChanged, notifyAdmins }) {
+export function createDisputeService({ db, payments, onJobChanged, notifyAdmins, onOpened = () => {}, onResolved = () => {} }) {
   const getDispute = (id) => db.prepare('SELECT * FROM disputes WHERE id = ?').get(id);
 
   /** Customer, assigned pro or an admin can raise a dispute once the pro is on site. Unsent payouts are held. */
@@ -35,6 +35,7 @@ export function createDisputeService({ db, payments, onJobChanged, notifyAdmins 
       .run(jobId, user.id, reason, String(details).trim().slice(0, 2000));
     payments.holdPayouts(jobId);
     onJobChanged(jobId);
+    onOpened(jobId, user.id);
     notifyAdmins('admin:updated', { type: 'dispute', jobId });
     return getDispute(Number(lastInsertRowid));
   }
@@ -64,6 +65,7 @@ export function createDisputeService({ db, payments, onJobChanged, notifyAdmins 
     }
     await payments.settleHeldPayouts(dispute.job_id, payoutAction);
     onJobChanged(dispute.job_id);
+    onResolved(dispute.job_id, note.trim());
     notifyAdmins('admin:updated', { type: 'dispute', jobId: dispute.job_id });
     return getDispute(disputeId);
   }

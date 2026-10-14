@@ -66,3 +66,13 @@ export const PAYOUT_LABELS = {
 
 /** Paystack's hosted checkout; it sends the customer back to the job page when they're done. */
 export const goToCheckout = (url) => window.location.assign(url);
+
+/** "just now", "5 min ago", "3 h ago", then a date. */
+export function ago(value) {
+  if (!value) return '';
+  const seconds = (Date.now() - parse(value).getTime()) / 1000;
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
+  return parse(value).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}

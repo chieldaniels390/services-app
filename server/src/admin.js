@@ -104,6 +104,9 @@ export function createAdminService({ db, jobs, verification }) {
         FROM disputes d JOIN users u ON u.id = d.opened_by LEFT JOIN users a ON a.id = d.resolved_by
         WHERE d.job_id = ? ORDER BY d.id DESC`).all(id).map((d) => ({ ...d, reasonLabel: DISPUTE_REASONS[d.reason] })),
       messages: jobs.messages(admin, id),
+      sms: db.prepare(`
+        SELECT s.id, s.type, s.to_number AS toNumber, s.body, s.provider, s.status, s.error, s.created_at AS createdAt, u.name AS userName
+        FROM sms_messages s JOIN users u ON u.id = s.user_id WHERE s.job_id = ? ORDER BY s.id`).all(id),
       refundableCents: db.prepare(`
         SELECT COALESCE(SUM(amount_cents - refunded_cents), 0) AS c FROM payments
         WHERE job_id = ? AND status IN ('paid', 'refund_pending')`).get(id).c,

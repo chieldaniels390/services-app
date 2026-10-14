@@ -10,6 +10,8 @@ import JobPage from './pages/JobPage.jsx';
 import History from './pages/History.jsx';
 import Payouts from './pages/Payouts.jsx';
 import Verification from './pages/Verification.jsx';
+import Settings from './pages/Settings.jsx';
+import Bell from './components/Bell.jsx';
 
 
 export const APP_NAME = 'ProNow';
@@ -35,7 +37,8 @@ function Shell({ children }) {
             <NavLink to="/" end>Home</NavLink>
             <NavLink to="/history">{user.role === 'provider' ? 'Jobs' : 'My bookings'}</NavLink>
             {user.role === 'provider' && <NavLink to="/payouts">Payouts</NavLink>}
-            <button className="link" onClick={signOut}>Sign out</button>
+            <Bell />
+            <NavLink to="/settings" className="icon-link" aria-label="Settings" title="Settings">⚙️</NavLink>
           </nav>
         )}
         {user?.role === 'admin' && (
@@ -79,6 +82,7 @@ export default function App() {
         <Route path="/jobs/:id" element={<RequireUser><JobPage /></RequireUser>} />
         <Route path="/history" element={<RequireUser><History /></RequireUser>} />
         <Route path="/payouts" element={user?.role === 'provider' ? <Payouts /> : <Navigate to="/" replace />} />
+        <Route path="/settings" element={<RequireUser><Settings /></RequireUser>} />
         <Route path="/verification" element={user?.role === 'provider' ? <Verification /> : <Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

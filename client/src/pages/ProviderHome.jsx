@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
 import MapView from '../components/MapView.jsx';
+import PushPrompt from '../components/PushPrompt.jsx';
 import { Stars } from '../components/Stars.jsx';
 import { STATUS_LABELS, money, when } from '../format.js';
 import { useSession, useSocketEvent } from '../session.jsx';
@@ -122,6 +123,7 @@ export default function ProviderHome() {
       </section>
 
       {error && <p className="error">{error}</p>}
+      {profile.online && <PushPrompt message="Turn on notifications so you never miss a job request." />}
 
       {!profile.payoutAccount && (
         <Link to="/payouts" className="banner warn">

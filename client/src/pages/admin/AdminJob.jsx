@@ -235,6 +235,21 @@ export default function AdminJob({ onChange }) {
           </section>
 
           <section className="card">
+            <h3>Text messages sent</h3>
+            {d.sms.length === 0 && <p className="muted small">None for this job.</p>}
+            {d.sms.map((s) => (
+              <div key={s.id} className="money-row">
+                <span className="grow">
+                  {s.body}
+                  <br /><span className="muted small">To {s.userName} ({s.toNumber}) via {s.provider} · {when(s.createdAt)}</span>
+                  {s.error && <><br /><span className="error small">{s.error}</span></>}
+                </span>
+                <span className={`pill ${s.status === 'sent' ? 'pay-paid' : s.status === 'failed' ? 'payout-failed' : ''}`}>{s.status}</span>
+              </div>
+            ))}
+          </section>
+
+          <section className="card">
             <h3>Messages</h3>
             {d.messages.length === 0 && <p className="muted small">No messages.</p>}
             <div className="message-log">

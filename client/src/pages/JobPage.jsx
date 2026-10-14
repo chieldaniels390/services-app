@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api.js';
 import Chat from '../components/Chat.jsx';
+import PushPrompt from '../components/PushPrompt.jsx';
 import ReportProblem from '../components/ReportProblem.jsx';
 import MapView from '../components/MapView.jsx';
 import StatusTimeline from '../components/StatusTimeline.jsx';
@@ -221,6 +222,9 @@ export default function JobPage() {
         </section>
 
         {paymentNotice && <p className="notice">{paymentNotice}</p>}
+        {!isPro && ['requested', 'accepted', 'en_route'].includes(job.status) && (
+          <PushPrompt message="Get a notification when your pro accepts and is on the way." />
+        )}
 
         {!isPro && job.provider && (
           <section className="card person">

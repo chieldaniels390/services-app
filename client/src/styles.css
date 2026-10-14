@@ -384,3 +384,35 @@ label.radio input { width: auto; }
 
 /* Not enough room for every badge next to the pro's nav on small phones; payment screens still show test mode. */
 @media (max-width: 420px) { .badge.test { display: none; } }
+
+/* Notifications */
+.icon-link { font-size: 1.1rem; line-height: 1; }
+.bell { position: relative; }
+.bell-button { position: relative; background: none; border: none; font-size: 1.15rem; cursor: pointer; padding: 0.2rem; line-height: 1; }
+.bell-button .count { position: absolute; top: -6px; right: -10px; margin: 0; }
+.bell-panel {
+  position: absolute; right: -60px; top: calc(100% + 10px); width: min(360px, calc(100vw - 24px)); max-height: 70vh; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 10px 30px rgb(15 23 42 / 18%); z-index: 1100;
+}
+.bell-head { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.9rem; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); }
+.bell-empty { padding: 1rem; }
+.bell-panel ul { list-style: none; margin: 0; padding: 0; }
+.bell-panel li button, .toast {
+  display: flex; flex-direction: column; gap: 0.15rem; width: 100%; text-align: left; font: inherit; color: var(--text);
+  background: none; border: none; border-bottom: 1px solid var(--border); padding: 0.7rem 0.9rem; cursor: pointer;
+}
+.bell-panel li button.unread { background: color-mix(in srgb, var(--brand) 7%, transparent); }
+.bell-panel li button.unread strong::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--brand); margin-right: 0.4rem; vertical-align: middle; }
+.bell-panel li button span:not(.muted) { font-size: 0.88rem; }
+.toasts { position: fixed; z-index: 2000; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 0.5rem; width: min(360px, calc(100vw - 32px)); }
+.toast { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 10px 30px rgb(15 23 42 / 18%); animation: pop 0.25s ease-out; border-left: 4px solid var(--brand); }
+@media (max-width: 520px) {
+  .toasts { left: 12px; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); width: auto; }
+  .bell-panel { position: fixed; left: 12px; right: 12px; top: 58px; width: auto; }
+}
+.push-prompt { display: flex; align-items: center; gap: 0.6rem; background: var(--brand-soft); border-radius: 12px; padding: 0.6rem 0.75rem; }
+.push-prompt .icon { font-size: 1.2rem; }
+.settings { display: flex; flex-direction: column; gap: 0.75rem; max-width: 640px; margin: 0 auto; }
+.setting { display: flex; gap: 1rem; align-items: center; padding: 0.75rem 0; border-top: 1px solid var(--border); }
+.setting p { margin: 0.15rem 0 0; }
+.toggle:disabled { opacity: 0.45; cursor: not-allowed; }

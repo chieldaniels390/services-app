@@ -13,7 +13,11 @@ import { isValidPoint } from './geo.js';
 import { createJobService, ratingOf } from './jobs.js';
 import { createAdminService } from './admin.js';
 import { DISPUTE_REASONS } from './disputes.js';
+import { createNotifier } from './notifications.js';
 import { createPaystack } from './paystack.js';
+import { toE164 } from './phone.js';
+import { createPushService } from './push.js';
+import { createSmsProvider } from './sms/index.js';
 import { DOCUMENT_KINDS, MAX_DOCUMENT_BYTES, createVerificationService } from './verification.js';
 import { JOB_SIZES } from './pricing.js';
 
@@ -24,6 +28,8 @@ export function createApp({
   geocoder = createGeocoder(config.geocoder),
   paystack = createPaystack(config.paystack),
   uploadDir = config.uploadDir,
+  smsProvider = createSmsProvider(config.sms.provider),
+  pushOptions = {},
 }) {
   const app = express();
   const server = createServer(app);
@@ -32,14 +38,20 @@ export function createApp({
   const notify = (userId, event, payload) => io.to(`user:${userId}`).emit(event, payload);
   notify.providers = (event, payload) => io.to('providers').emit(event, payload);
   const notifyAdmins = (event, payload) => io.to('admins').emit(event, payload);
-  const jobs = createJobService({ db, notify, paystack, notifyAdmins });
+  const push = createPushService({ db, ...config.push, ...pushOptions });
+  const notifier = createNotifier({
+    db, emit: notify, push, sms: smsProvider, appUrl: config.appUrl, defaultCountryCode: config.sms.defaultCountryCode,
+  });
+  const jobs = createJobService({ db, notify, paystack, notifyAdmins, notifier });
   const { payments, disputes } = jobs;
-  const verification = createVerificationService({ db, uploadDir, notify, notifyAdmins });
+  const verification = createVerificationService({ db, uploadDir, notify, notifyAdmins, notifier });
   const admin = createAdminService({ db, jobs, verification });
 
-  const findUser = (id) => db.prepare('SELECT id, role, name, email, phone FROM users WHERE id = ?').get(id);
+  const findUser = (id) => db.prepare('SELECT id, role, name, email, phone, sms_enabled FROM users WHERE id = ?').get(id);
 
-  function profileOf(user) {
+  function profileOf(fullUser) {
+    const { sms_enabled: smsEnabled, ...rest } = fullUser;
+    const user = { ...rest, smsEnabled: smsEnabled !== 0 };
     if (user.role !== 'provider') return user;
     const p = db.prepare('SELECT * FROM provider_profiles WHERE user_id = ?').get(user.id);
     const categories = db.prepare('SELECT category_id FROM provider_categories WHERE user_id = ?').all(user.id).map((r) => r.category_id);
@@ -121,6 +133,8 @@ export function createApp({
     jobSizes: JOB_SIZES,
     documentKinds: Object.fromEntries(Object.entries(DOCUMENT_KINDS).map(([k, v]) => [k, v.label])),
     disputeReasons: DISPUTE_REASONS,
+    push: { publicKey: push.publicKey },
+    sms: { enabled: Boolean(smsProvider) },
   }));
 
   api.get('/categories', (_req, res) => {
@@ -182,6 +196,34 @@ export function createApp({
   });
 
   api.get('/me', auth(), (req, res) => res.json(profileOf(req.user)));
+
+  // Contact details and notification preferences.
+  api.patch('/me', auth(), (req, res) => {
+    const { phone, smsEnabled } = req.body ?? {};
+    if (phone !== undefined) {
+      const trimmed = String(phone ?? '').trim();
+      if (trimmed && !toE164(trimmed, config.sms.defaultCountryCode)) throw badRequest('Enter a valid mobile number, e.g. 082 123 4567');
+      db.prepare('UPDATE users SET phone = ? WHERE id = ?').run(trimmed || null, req.user.id);
+    }
+    if (smsEnabled !== undefined) db.prepare('UPDATE users SET sms_enabled = ? WHERE id = ?').run(smsEnabled ? 1 : 0, req.user.id);
+    res.json(profileOf(findUser(req.user.id)));
+  });
+
+  // --- Notifications ----------------------------------------------------
+
+  api.get('/notifications', auth(), (req, res) => res.json(notifier.list(req.user.id, Number(req.query.limit) || 30)));
+  api.post('/notifications/read', auth(), (req, res) => {
+    const ids = req.body?.all ? 'all' : (Array.isArray(req.body?.ids) ? req.body.ids.slice(0, 100) : []);
+    res.json(notifier.markRead(req.user.id, ids));
+  });
+  api.post('/push/subscriptions', auth(), (req, res) => {
+    push.subscribe(req.user.id, req.body, req.get('user-agent'));
+    res.status(201).json({ ok: true });
+  });
+  api.delete('/push/subscriptions', auth(), (req, res) => {
+    push.unsubscribe(req.user.id, req.body?.endpoint);
+    res.json({ ok: true });
+  });
 
   // --- Address search (proxied so the geocoder's rate limit and User-Agent rules are enforced in one place) ---
 
@@ -364,5 +406,5 @@ export function createApp({
     });
   });
 
-  return { app, server, io };
+  return { app, server, io, notifier };
 }

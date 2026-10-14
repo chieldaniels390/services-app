@@ -22,6 +22,17 @@ export const config = {
     lat: Number(process.env.DEFAULT_LAT ?? -26.2041),
     lng: Number(process.env.DEFAULT_LNG ?? 28.0473),
   },
+  sms: {
+    // console (prints, the default), none, twilio or bulksms. See src/sms/README.md to add another.
+    provider: process.env.SMS_PROVIDER ?? 'console',
+    defaultCountryCode: process.env.SMS_DEFAULT_COUNTRY_CODE ?? '27',
+  },
+  push: {
+    // Generate with: npx web-push generate-vapid-keys. If unset, keys are generated once and kept in the database.
+    publicKey: process.env.VAPID_PUBLIC_KEY,
+    privateKey: process.env.VAPID_PRIVATE_KEY,
+    subject: process.env.VAPID_SUBJECT ?? 'mailto:support@example.com',
+  },
   geocoder: {
     // Nominatim (OpenStreetMap). Its usage policy needs an identifying User-Agent and at most 1 request/second;
     // for heavy traffic, self-host Nominatim or point this at a commercial provider with a compatible API.

@@ -34,7 +34,9 @@ const JOB_SELECT = `
 
 export const ratingOf = (sum, count) => (count ? Math.round((sum / count) * 10) / 10 : null);
 
-export function createJobService({ db, notify, paystack, notifyAdmins = () => {} }) {
+const silentNotifier = { notify: () => {} };
+
+export function createJobService({ db, notify, paystack, notifyAdmins = () => {}, notifier = silentNotifier }) {
   const payments = createPaymentService({
     db,
     paystack,
@@ -46,8 +48,23 @@ export function createJobService({ db, notify, paystack, notifyAdmins = () => {}
     },
     onJobChanged: (id) => notifyParties(getJobRow(id)),
     onPayoutChanged: (providerId) => notify(providerId, 'payouts:updated', {}),
+    onPayoutPaid: (payout) => notifier.notify(payout.provider_id, 'payout_paid', { amountCents: payout.amount_cents, jobId: payout.job_id }),
+    onRefund: (jobId, amountCents) => {
+      const job = getJobRow(jobId);
+      notifier.notify(job.customer_id, 'refund_issued', { job, amountCents });
+    },
   });
-  const disputes = createDisputeService({ db, payments, onJobChanged: (id) => notifyParties(getJobRow(id)), notifyAdmins });
+  const disputes = createDisputeService({
+    db, payments, notifyAdmins, onJobChanged: (id) => notifyParties(getJobRow(id)),
+    onOpened: (jobId, openedBy) => {
+      const job = getJobRow(jobId);
+      for (const userId of [job.customer_id, job.provider_id]) if (userId !== openedBy) notifier.notify(userId, 'dispute_opened', { job });
+    },
+    onResolved: (jobId, note) => {
+      const job = getJobRow(jobId);
+      for (const userId of [job.customer_id, job.provider_id]) notifier.notify(userId, 'dispute_resolved', { job, note });
+    },
+  });
   const isApproved = (userId) =>
     db.prepare('SELECT verification_status FROM provider_profiles WHERE user_id = ?').get(userId)?.verification_status === 'approved';
   const feeRateOf = (row) => row.fee_rate ?? config.platformFeeRate;
@@ -184,6 +201,7 @@ export function createJobService({ db, notify, paystack, notifyAdmins = () => {}
     for (const p of offered) {
       const dto = toDto(row, { id: p.id, role: 'provider' });
       notify(p.id, 'job:offer', { ...dto, distanceKm: round1(p.distanceKm), etaMinutes: etaMinutes(p.distanceKm) });
+      notifier.notify(p.id, 'new_offer', { job: row, distanceKm: round1(p.distanceKm), payoutCents: dto.payoutCents });
     }
     return offered.length;
   }
@@ -301,6 +319,7 @@ export function createJobService({ db, notify, paystack, notifyAdmins = () => {}
     const updated = getJobRow(id);
     notifyParties(updated);
     notify.providers('job:taken', { id });
+    notifier.notify(updated.customer_id, 'job_accepted', { job: updated });
     return toDto(updated, provider);
   }
 
@@ -330,6 +349,11 @@ export function createJobService({ db, notify, paystack, notifyAdmins = () => {}
     }
     const updated = getJobRow(id);
     notifyParties(updated);
+    const event = { en_route: 'pro_en_route', arrived: 'pro_arrived', completed: 'job_completed' }[status];
+    if (event) {
+      const from = updated.provider_lat != null ? { lat: updated.provider_lat, lng: updated.provider_lng } : null;
+      notifier.notify(updated.customer_id, event, { job: updated, eta: from ? etaMinutes(distanceKm(from, updated)) : null });
+    }
     return toDto(updated, provider);
   }
 
@@ -345,6 +369,7 @@ export function createJobService({ db, notify, paystack, notifyAdmins = () => {}
       const updated = getJobRow(id);
       notifyParties(updated);
       if (row.status === 'requested') notify.providers('job:taken', { id });
+      if (row.provider_id) notifier.notify(row.provider_id, 'job_cancelled', { job: updated });
       return toDto(updated, user);
     }
     if (user.id === row.provider_id) {
@@ -354,6 +379,7 @@ export function createJobService({ db, notify, paystack, notifyAdmins = () => {}
       notify(row.provider_id, 'job:released', { id });
       const requeued = getJobRow(id);
       notifyParties(requeued);
+      notifier.notify(row.customer_id, 'job_released', { job: requeued, proName: row.provider_name });
       dispatch(requeued);
       return { id, status: 'released' };
     }
@@ -396,6 +422,9 @@ export function createJobService({ db, notify, paystack, notifyAdmins = () => {}
       FROM messages m JOIN users u ON u.id = m.sender_id WHERE m.id = ?`).get(Number(lastInsertRowid));
     notify(row.customer_id, 'message:new', message);
     notify(row.provider_id, 'message:new', message);
+    notifier.notify(user.id === row.customer_id ? row.provider_id : row.customer_id, 'new_message', {
+      job: row, senderName: user.name, text,
+    });
     return message;
   }
 

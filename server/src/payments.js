@@ -11,7 +11,9 @@ const BANKS_TTL_MS = 24 * 60 * 60 * 1000;
  * their bank account with a Paystack transfer. Parts the pro adds at completion are approved and
  * paid by the customer separately and passed on to the pro in full.
  */
-export function createPaymentService({ db, paystack, appUrl, onBookingPaid, onJobChanged, onPayoutChanged }) {
+export function createPaymentService({
+  db, paystack, appUrl, onBookingPaid, onJobChanged, onPayoutChanged, onPayoutPaid = () => {}, onRefund = () => {},
+}) {
   const getJob = (id) => db.prepare('SELECT j.*, u.email AS customer_email FROM jobs j JOIN users u ON u.id = j.customer_id WHERE j.id = ?').get(id);
   const getPayment = (reference) => db.prepare('SELECT * FROM payments WHERE reference = ?').get(reference);
 
@@ -106,6 +108,7 @@ export function createPaymentService({ db, paystack, appUrl, onBookingPaid, onJo
     db.prepare(`
       INSERT INTO refunds (job_id, payment_id, amount_cents, reason, paystack_id, created_by) VALUES (?, ?, ?, ?, ?, ?)`)
       .run(payment.job_id, payment.id, amountCents, String(reason).slice(0, 500), data?.id != null ? String(data.id) : null, byUserId);
+    onRefund(payment.job_id, amountCents);
     if (full) {
       db.prepare("UPDATE payments SET status = 'refund_pending' WHERE id = ?").run(payment.id);
       if (payment.kind === 'booking') {
@@ -258,6 +261,7 @@ export function createPaymentService({ db, paystack, appUrl, onBookingPaid, onJo
       });
       if (data.status === 'success') {
         db.prepare("UPDATE payouts SET status = 'paid', transfer_code = ?, paid_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(data.transfer_code, payoutId);
+        onPayoutPaid(payout);
       } else if (data.status === 'otp') {
         fail('Transfers need OTP turned off in the Paystack dashboard (Settings > Preferences)', true);
       } else if (data.status === 'failed') {
@@ -281,7 +285,9 @@ export function createPaymentService({ db, paystack, appUrl, onBookingPaid, onJo
     const payout = db.prepare('SELECT * FROM payouts WHERE reference = ?').get(data?.reference);
     if (!payout) return;
     if (event === 'transfer.success') {
-      db.prepare("UPDATE payouts SET status = 'paid', paid_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(payout.id);
+      // Webhooks can arrive more than once; only the first one counts (and notifies the pro).
+      const { changes } = db.prepare("UPDATE payouts SET status = 'paid', paid_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND status != 'paid'").run(payout.id);
+      if (changes) onPayoutPaid(payout);
     } else {
       db.prepare("UPDATE payouts SET status = 'failed', failure_reason = ?, reference = ?, updated_at = datetime('now') WHERE id = ?")
         .run(event === 'transfer.reversed' ? 'The bank reversed this transfer' : data.reason || 'The transfer failed', newReference('po', payout.job_id), payout.id);

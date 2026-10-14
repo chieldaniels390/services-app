@@ -67,6 +67,64 @@ Typical 2025/26 South African rates, set in `server/src/categories.js` (amounts 
 
 Standard jobs are quoted at 2 hours and big jobs at 4. Rates differ between cities and suburbs, so check them against local competitors before launch.
 
+## Notifications
+
+| In-app bell | Settings | Texts sent, as the admin sees them |
+| --- | --- | --- |
+| ![](docs/screenshots/notifications.png) | ![](docs/screenshots/notification-settings.png) | ![](docs/screenshots/admin-sms.png) |
+
+Every event goes through one place (`server/src/notifications.js`), which decides the wording and the channels:
+
+| Event | Who | In-app | Push | SMS |
+| --- | --- | :-: | :-: | :-: |
+| Pro accepted the job | Customer | ✓ | ✓ | ✓ |
+| Pro is on the way (with ETA) | Customer | ✓ | ✓ | ✓ |
+| Pro has arrived | Customer | ✓ | ✓ | |
+| Job complete (total, or parts to approve) | Customer | ✓ | ✓ | ✓ |
+| Pro had to drop the job | Customer | ✓ | ✓ | |
+| Refund issued | Customer | ✓ | ✓ | |
+| New job request nearby | Pro | | ✓ | |
+| Customer cancelled | Pro | ✓ | ✓ | |
+| Payout paid to bank | Pro | ✓ | ✓ | |
+| Verification approved / needs attention | Pro | ✓ | ✓ | |
+| New chat message | Other party | | ✓ | |
+| Dispute opened / resolved | Both | ✓ | ✓ | |
+
+- **In-app:** a 🔔 bell with an unread count, plus a toast when something arrives while you're on a different page. Notifications are stored, so nothing is lost if you were offline.
+- **Push:** standard Web Push through a service worker (`client/public/sw.js`). It works in Chrome, Edge, Firefox and Safari. On iPhone it needs iOS 16.4+ and the app added to the home screen; the Settings page explains this.
+  - The worker doesn't show a push while the app is open in front, because the in-app toast covers it.
+  - Tapping a notification opens the job.
+  - Signing out unlinks the browser, so the next person on that device doesn't get the previous user's alerts.
+  - Pushes are only sent to the browser vendors' push services, so a user can't make the server send requests to an internal address.
+- **SMS:** only for the three key customer moments. Messages are plain ASCII (so each fits in one SMS) and include a link to the job.
+  - Numbers are normalised to international format, so `082 555 1234` becomes `+27825551234`.
+  - Customers can turn texts off in Settings.
+  - Every SMS attempt is logged and shown on the admin job page, with its status and any error.
+- Delivery happens in the background. A slow or failing SMS provider never slows down or breaks the job update itself.
+
+### Choosing an SMS provider
+
+Set `SMS_PROVIDER`:
+
+| Value | What it does | Needs |
+| --- | --- | --- |
+| `console` (default) | Prints texts to the server log, for development | – |
+| `none` | SMS off | – |
+| `twilio` | [Twilio](https://www.twilio.com/docs/messaging) | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM` or `TWILIO_MESSAGING_SERVICE_SID` |
+| `bulksms` | [BulkSMS](https://www.bulksms.com/developer/json/v1/) (South African) | `BULKSMS_TOKEN_ID`, `BULKSMS_TOKEN_SECRET`, optional `SMS_SENDER_ID` |
+
+Switching providers is just a config change. To add another one (Clickatell, Africa's Talking, Infobip...), write a ~25-line adapter with a single `send({ to, body })` method and register it in one line. See [`server/src/sms/README.md`](server/src/sms/README.md). The server refuses to start if the provider name is wrong or its credentials are missing, so a typo can't silently stop SMS.
+
+The Twilio and BulkSMS adapters are tested against the request format in each provider's API docs. Send yourself a test text before relying on them.
+
+### Push keys
+
+Web Push needs a VAPID key pair. If `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` aren't set, the server generates a pair on first start and stores it in the database.
+- That's fine for a single server.
+- If you run several servers, or might move the database, generate the keys once with `npx web-push generate-vapid-keys` and set them in the environment.
+- Changing the keys invalidates every existing subscription; users simply turn notifications on again.
+- Set `VAPID_SUBJECT` to a `mailto:` address that push services can contact you on.
+
 ## Verification, disputes and admin
 
 | Pro uploads documents | Admin reviews a pro | Admin resolves a dispute |
@@ -160,6 +218,9 @@ server/src
   verification.js  pro documents + approval
   disputes.js    raising and resolving disputes
   admin.js       admin panel queries
+  notifications.js  every notification's wording + delivery (in-app, push, SMS)
+  push.js        Web Push subscriptions and sending
+  sms/           SMS provider adapters (console, twilio, bulksms) - add your own here
   create-admin.js  CLI to create an admin account
   geocoder.js    address search / reverse lookup (Nominatim), throttled + cached
   db.js          schema
@@ -167,7 +228,8 @@ server/src
 client/src
   pages/         Landing, Auth, CustomerHome, ProviderHome, JobPage, History, Payouts, Verification
   pages/admin/   Overview, Pros, Pro, Jobs, Job, Disputes (loaded only for admins)
-  components/    MapView, AddressSearch, Chat, StatusTimeline, Stars
+  components/    MapView, AddressSearch, Chat, StatusTimeline, Stars, Bell, PushPrompt, ...
+  public/sw.js   service worker for push notifications
 ```
 
 ## Getting started
@@ -215,6 +277,10 @@ npm start         # serves API + app on PORT (default 4000)
 | `PLATFORM_FEE_RATE` | `0.15` | Platform's share of the upfront price (0.15 = 15%). Applies to new bookings |
 | `PAYSTACK_SECRET_KEY` | – | `sk_test_…` for test mode. Booking is disabled until set |
 | `APP_URL` | `http://localhost:5173` | Public URL customers return to after checkout |
+| `SMS_PROVIDER` | `console` | `console`, `none`, `twilio` or `bulksms` (see Notifications) |
+| `SMS_DEFAULT_COUNTRY_CODE` | `27` | Used to turn local numbers like `082…` into `+27…` |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | generated | Web Push keys. Set them if you run more than one server |
+| `VAPID_SUBJECT` | `mailto:support@example.com` | Contact address for push services |
 | `PAYSTACK_BASE_URL` | `https://api.paystack.co` | Only changed for tests |
 | `DISPATCH_RADIUS_KM` | `30` | How far away pros get offered a job |
 | `DEFAULT_LAT` / `DEFAULT_LNG` | Johannesburg | Default map centre |
@@ -236,6 +302,7 @@ npm test
 
 - Cancellation fees once a pro is on the way; automatically expire unpaid bookings
 - Automatic ID and face matching through a verification provider
+- Delivery receipts from the SMS provider, and a notification history clean-up job
 - Admin actions for failed payouts (retry or mark as paid by hand), and an audit log of admin actions
 - Pro verification (ID, licences, insurance) and an admin console
 - Photo uploads on requests, push notifications / SMS

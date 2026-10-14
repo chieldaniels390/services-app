@@ -1,6 +1,7 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
+import { createECDH, createHmac, randomBytes } from 'node:crypto';
+import webpush from 'web-push';
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -20,6 +21,10 @@ let fake;
 let db;
 let uploadDir;
 let adminToken;
+let notifier;
+const sentSms = [];
+const pushed = []; // { endpoint, headers, payload }
+const goneEndpoints = new Set();
 
 before(async () => {
   const geocoder = {
@@ -30,7 +35,17 @@ before(async () => {
   const paystack = createPaystack({ secretKey: SECRET, baseUrl: fake.url });
   db = openDb(':memory:');
   uploadDir = mkdtempSync(path.join(tmpdir(), 'pronow-uploads-'));
-  ({ server } = createApp({ db, geocoder, paystack, uploadDir }));
+  const smsProvider = { name: 'test', send: async (msg) => { sentSms.push(msg); return { id: `sms-${sentSms.length}` }; } };
+  // Runs web-push's real encryption and VAPID signing, then records the request instead of sending it.
+  const sendNotification = async (subscription, payload, options) => {
+    const request = webpush.generateRequestDetails(subscription, payload, options);
+    if (goneEndpoints.has(subscription.endpoint)) throw Object.assign(new Error('Gone'), { statusCode: 410 });
+    pushed.push({ endpoint: subscription.endpoint, headers: request.headers, payload: JSON.parse(payload) });
+  };
+  ({ server, notifier } = createApp({
+    db, geocoder, paystack, uploadDir, smsProvider,
+    pushOptions: { allowEndpoint: (host) => host === 'push.test', sendNotification },
+  }));
   await new Promise((resolve) => server.listen(0, resolve));
   base = `http://localhost:${server.address().port}`;
   db.prepare("INSERT INTO users (role, name, email, password_hash) VALUES ('admin', 'Ops', 'ops@test.com', ?)").run(hashPassword('admin-password-1'));
@@ -600,6 +615,148 @@ describe('disputes and refunds', () => {
     assert.ok(active.body.jobs.some((j) => j.id === id));
     const completed = await admin('GET', '/jobs?status=completed');
     assert.ok(!completed.body.jobs.some((j) => j.id === id));
+  });
+});
+
+const browserSubscription = (endpoint = `https://push.test/${randomBytes(6).toString('hex')}`) => {
+  const ecdh = createECDH('prime256v1');
+  ecdh.generateKeys();
+  return { endpoint, keys: { p256dh: ecdh.getPublicKey().toString('base64url'), auth: randomBytes(16).toString('base64url') } };
+};
+
+describe('notifications', () => {
+  test('key job events reach the customer in-app, by push and by SMS', async () => {
+    const customer = await register('customer', { phone: '082 555 1234' });
+    const sub = browserSubscription();
+    assert.equal((await call('POST', '/push/subscriptions', { token: customer.token, body: sub })).status, 201);
+    const pro = await onlinePro();
+    const proSub = browserSubscription();
+    await call('POST', '/push/subscriptions', { token: pro.token, body: proSub });
+
+    const { id } = await book(customer);
+    await notifier.idle();
+    const offer = pushed.find((p) => p.endpoint === proSub.endpoint);
+    assert.match(offer.payload.title, /New plumbing request/);
+    assert.match(offer.payload.body, /you'd earn R/);
+    // A real, encrypted Web Push request.
+    assert.equal(offer.headers['Content-Encoding'], 'aes128gcm');
+    assert.match(offer.headers.Authorization, /^vapid t=.+, k=/);
+
+    const smsBefore = sentSms.length;
+    await call('POST', `/jobs/${id}/accept`, { token: pro.token });
+    await call('POST', `/jobs/${id}/status`, { token: pro.token, body: { status: 'en_route' } });
+    await call('POST', `/jobs/${id}/status`, { token: pro.token, body: { status: 'arrived' } });
+    await call('POST', `/jobs/${id}/status`, { token: pro.token, body: { status: 'in_progress' } });
+    await call('POST', `/jobs/${id}/status`, { token: pro.token, body: { status: 'completed' } });
+    await notifier.idle();
+
+    // SMS only for the three key moments, to the normalised number, with a link back to the job.
+    const texts = sentSms.slice(smsBefore);
+    assert.equal(texts.length, 3);
+    assert.ok(texts.every((m) => m.to === '+27825551234'));
+    assert.match(texts[0].body, /accepted your plumbing job/);
+    assert.match(texts[1].body, /is on the way and should arrive in about \d+ min/);
+    assert.match(texts[2].body, /job is done\. Total R\d/);
+    assert.ok(texts.every((m) => m.body.includes(`/jobs/${id}`)));
+    assert.ok(texts.every((m) => /^[\x20-\x7e]+$/.test(m.body)), 'plain ASCII so the SMS stays in one segment');
+
+    const inbox = await call('GET', '/notifications', { token: customer.token });
+    assert.deepEqual(inbox.body.items.slice(0, 4).map((n) => n.type), ['job_completed', 'pro_arrived', 'pro_en_route', 'job_accepted']);
+    assert.equal(inbox.body.items[0].url, `/jobs/${id}`);
+    assert.ok(inbox.body.unread >= 4);
+    assert.ok(pushed.filter((p) => p.endpoint === sub.endpoint).length >= 4);
+
+    const read = await call('POST', '/notifications/read', { token: customer.token, body: { ids: [inbox.body.items[0].id] } });
+    assert.equal(read.body.unread, inbox.body.unread - 1);
+    assert.equal((await call('POST', '/notifications/read', { token: customer.token, body: { all: true } })).body.unread, 0);
+
+    const detail = await admin('GET', `/jobs/${id}`);
+    assert.deepEqual(detail.body.sms.map((s) => [s.type, s.status]), [['job_accepted', 'sent'], ['pro_en_route', 'sent'], ['job_completed', 'sent']]);
+  });
+
+  test('no SMS when the user opts out or has no usable number', async () => {
+    const optedOut = await register('customer', { phone: '0825550000' });
+    assert.equal((await call('PATCH', '/me', { token: optedOut.token, body: { smsEnabled: false } })).body.smsEnabled, false);
+    const noPhone = await register('customer', { phone: '' });
+    const pro = await onlinePro();
+    const before = sentSms.length;
+    for (const customer of [optedOut, noPhone]) {
+      const { id } = await book(customer);
+      await call('POST', `/jobs/${id}/accept`, { token: pro.token });
+      await call('POST', `/jobs/${id}/cancel`, { token: pro.token });
+    }
+    await notifier.idle();
+    assert.equal(sentSms.length, before);
+    // ...but they still get it in the app.
+    assert.ok((await call('GET', '/notifications', { token: optedOut.token })).body.items.some((n) => n.type === 'job_accepted'));
+    // The pro dropping out tells the customer.
+    assert.ok((await call('GET', '/notifications', { token: noPhone.token })).body.items.some((n) => n.type === 'job_released'));
+  });
+
+  test('phone numbers are validated when saved', async () => {
+    const customer = await register('customer');
+    assert.equal((await call('PATCH', '/me', { token: customer.token, body: { phone: '12' } })).status, 400);
+    const ok = await call('PATCH', '/me', { token: customer.token, body: { phone: '+27 82 123 4567' } });
+    assert.equal(ok.body.phone, '+27 82 123 4567');
+  });
+
+  test('chat messages are pushed to the other party only', async () => {
+    const { customer, pro, id } = await jobInProgress();
+    const customerSub = browserSubscription();
+    const proSub = browserSubscription();
+    await call('POST', '/push/subscriptions', { token: customer.token, body: customerSub });
+    await call('POST', '/push/subscriptions', { token: pro.token, body: proSub });
+    await call('POST', `/jobs/${id}/messages`, { token: customer.token, body: { body: 'Gate code is 4321' } });
+    await notifier.idle();
+    const toPro = pushed.filter((p) => p.endpoint === proSub.endpoint);
+    assert.deepEqual(toPro.at(-1).payload, { title: customer.user.name, body: 'Gate code is 4321', url: `/jobs/${id}`, tag: `chat-${id}` });
+    assert.ok(!pushed.some((p) => p.endpoint === customerSub.endpoint && p.payload.tag === `chat-${id}`));
+  });
+
+  test('push subscriptions: only real push services, and dead ones are cleaned up', async () => {
+    const customer = await register('customer');
+    const internal = browserSubscription('http://169.254.169.254/latest/meta-data');
+    assert.equal((await call('POST', '/push/subscriptions', { token: customer.token, body: internal })).status, 400);
+    assert.equal((await call('POST', '/push/subscriptions', { token: customer.token, body: { endpoint: 'https://push.test/x' } })).status, 400);
+
+    const sub = browserSubscription();
+    await call('POST', '/push/subscriptions', { token: customer.token, body: sub });
+    goneEndpoints.add(sub.endpoint);
+    const pro = await onlinePro();
+    const { id } = await book(customer);
+    await call('POST', `/jobs/${id}/accept`, { token: pro.token });
+    await notifier.idle();
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM push_subscriptions WHERE endpoint = ?').get(sub.endpoint).n, 0);
+
+    const again = browserSubscription();
+    await call('POST', '/push/subscriptions', { token: customer.token, body: again });
+    await call('DELETE', '/push/subscriptions', { token: customer.token, body: { endpoint: again.endpoint } });
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM push_subscriptions WHERE endpoint = ?').get(again.endpoint).n, 0);
+  });
+
+  test('pros hear about payouts and verification; both sides hear about disputes and refunds', async () => {
+    const { customer, pro, id } = await jobInProgress();
+    await call('PUT', '/provider/payout-account', { token: pro.token, body: { bankCode: '470010', accountNumber: '1234567890', accountName: 'Pro' } });
+    fake.state.transferStatus = 'success';
+    try {
+      await call('POST', `/jobs/${id}/status`, { token: pro.token, body: { status: 'completed' } });
+    } finally {
+      fake.state.transferStatus = 'pending';
+    }
+    await call('POST', `/jobs/${id}/disputes`, { token: customer.token, body: { reason: 'quality' } });
+    const dispute = (await admin('GET', `/jobs/${id}`)).body.disputes[0];
+    await admin('POST', `/disputes/${dispute.id}/resolve`, { refundCents: 10000, payoutAction: 'release', note: 'Goodwill refund' });
+    await notifier.idle();
+
+    const types = async (u) => (await call('GET', '/notifications', { token: u.token })).body.items.map((n) => n.type);
+    const proTypes = await types(pro);
+    assert.ok(proTypes.includes('payout_paid'));
+    assert.ok(proTypes.includes('dispute_opened'));
+    assert.ok(proTypes.includes('dispute_resolved'));
+    const customerTypes = await types(customer);
+    assert.ok(customerTypes.includes('refund_issued'));
+    assert.ok(customerTypes.includes('dispute_resolved'));
+    assert.ok(!customerTypes.includes('dispute_opened'), 'the person who reported it is not told about their own report');
   });
 });
 
