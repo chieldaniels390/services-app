@@ -466,13 +466,13 @@ export default function JobPage() {
             {next.status === 'completed' && (
               <label>
                 Materials / parts cost ({currencySymbol()})
-                <input type="number" min="0" step="0.01" inputMode="decimal" placeholder="0.00" value={materials} onChange={(e) => setMaterials(e.target.value)} />
+                <input type="number" min="0" step="1" inputMode="numeric" placeholder="0" value={materials} onChange={(e) => setMaterials(e.target.value)} />
               </label>
             )}
             <button
               className="btn primary lg block"
               disabled={busy}
-              onClick={() => act('/status', { status: next.status, materialsCents: Math.round(Number(materials || 0) * 100) })}
+              onClick={() => act('/status', { status: next.status, materialsCents: Math.round(Number(materials || 0)) * 100 })}
             >
               {next.label}
             </button>

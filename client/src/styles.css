@@ -553,3 +553,8 @@ label.radio input { width: auto; }
 .pill.alert-open { background: #b91c1c; color: #fff; }
 .pill.alert-acknowledged { background: #fde68a; color: #78350f; }
 .pill.alert-resolved { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
+
+/* Prices on service cards */
+.from-price { margin-top: auto; padding-top: 0.35rem; font-size: 0.85rem; font-weight: 700; color: var(--brand-strong); }
+.pending-quote span { font-size: 1.05rem; }
+.pending-quote p { margin: 0.25rem 0 0; }

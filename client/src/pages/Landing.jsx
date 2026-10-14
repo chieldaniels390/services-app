@@ -21,7 +21,7 @@ export default function Landing() {
           <div key={c.id} className="category static">
             <span className="icon">{c.icon}</span>
             <strong>{c.name}</strong>
-            <span className="muted small">from {money(c.calloutCents + c.hourlyCents)}</span>
+            <span className="from-price">Call-out from {money(c.calloutCents)}</span>
           </div>
         ))}
       </section>

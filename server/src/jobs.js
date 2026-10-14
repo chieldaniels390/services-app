@@ -6,7 +6,7 @@ import { DISPUTE_REASONS, createDisputeService } from './disputes.js';
 import { createPaymentService } from './payments.js';
 import { createReviewService } from './reviews.js';
 import { isWithinHours } from './time.js';
-import { JOB_SIZES, quote, settle, surgeMultiplier } from './pricing.js';
+import { JOB_SIZES, quote, settle, surgeMultiplier, toWholeRand } from './pricing.js';
 
 export const ACTIVE_STATUSES = ['accepted', 'en_route', 'arrived', 'in_progress'];
 const ACTIVE_SQL = ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ');
@@ -444,6 +444,7 @@ export function createJobService({
       if (!Number.isInteger(materialsCents) || materialsCents < 0 || materialsCents > 1_000_000) {
         throw badRequest('Materials cost must be a non-negative amount');
       }
+      materialsCents = toWholeRand(materialsCents); // whole rands, like every other price
       const bill = settle(row.estimated_cents, materialsCents, feeRateOf(row));
       const { changes } = db.prepare(`
         UPDATE jobs SET status = 'completed', completed_at = datetime('now'), materials_cents = ?,

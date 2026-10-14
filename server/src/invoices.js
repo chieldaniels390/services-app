@@ -2,7 +2,7 @@ import PDFDocument from 'pdfkit';
 import { config } from './config.js';
 import { transaction } from './db.js';
 import { conflict, forbidden, notFound } from './errors.js';
-import { rand } from './notifications.js';
+import { randExact as rand } from './notifications.js';
 import { JOB_SIZES } from './pricing.js';
 
 const fromSql = (v) => new Date(`${v.replace(' ', 'T')}Z`);
