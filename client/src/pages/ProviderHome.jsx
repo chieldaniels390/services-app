@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
-import MapView from '../components/MapView.jsx';
+import MapView, { circleBounds } from '../components/MapView.jsx';
 import PushPrompt from '../components/PushPrompt.jsx';
 import { Stars } from '../components/Stars.jsx';
 import { STATUS_LABELS, money, when } from '../format.js';
@@ -77,6 +77,9 @@ export default function ProviderHome() {
     ...requests.map((j) => ({ id: `job-${j.id}`, ...j.location, emoji: j.category.icon, variant: 'home', label: `${j.category.name} · ${money(j.payoutCents)}` })),
   ];
   const myServices = categories.filter((c) => profile.categories.includes(c.id));
+  // Where requests can come from: the pro's chosen area, or the default radius around them.
+  const area = profile.serviceArea ?? (profile.location && { ...profile.location, radiusKm: config.defaultRadiusKm });
+  const { withinHours, hoursToday } = profile.availability;
 
   if (profile.verificationStatus !== 'approved') {
     const pending = profile.verificationStatus === 'pending';
@@ -111,10 +114,20 @@ export default function ProviderHome() {
         <div className="grow">
           <h2>{profile.online ? "You're online" : "You're offline"}</h2>
           <p className="muted small">
-            {profile.online ? 'New requests nearby will pop up here instantly.' : 'Go online to start receiving job requests.'}
+            {!profile.online
+              ? 'Go online to start receiving job requests.'
+              : withinHours
+                ? 'New requests in your area will pop up here instantly.'
+                : `You're outside your working hours (today: ${hoursToday}), so you won't get new requests until your next shift.`}
           </p>
           <p className="small">
             <Stars value={profile.rating} count={profile.ratingCount} /> · {myServices.map((c) => c.icon).join(' ')}
+            {profile.pendingCategories.length > 0 && <span className="muted"> · {profile.pendingCategories.length} trade awaiting approval</span>}
+          </p>
+          <p className="small">
+            {profile.serviceArea ? `Within ${profile.serviceArea.radiusKm} km` : `Within ${config.defaultRadiusKm} km of you`}
+            {' · '}{profile.workingHours ? `Today ${hoursToday}` : 'Any time'}
+            {' · '}<Link to="/work">Work settings</Link>
           </p>
         </div>
         <button className={`toggle ${profile.online ? 'on' : ''}`} onClick={() => (profile.online ? updateStatus({ online: false }) : goOnline())} aria-pressed={profile.online}>
@@ -141,24 +154,29 @@ export default function ProviderHome() {
         </Link>
       )}
 
-      {earnings && earnings.pendingPayoutCents > 0 && (
-        <Link to="/payouts" className="small">{money(earnings.pendingPayoutCents)} on its way to your bank ›</Link>
-      )}
       {earnings && (
-        <section className="stats">
-          <div><span className="muted small">Today</span><strong>{money(earnings.today.cents)}</strong><span className="muted small">{plural(earnings.today.jobs, 'job')}</span></div>
-          <div><span className="muted small">Last 7 days</span><strong>{money(earnings.week.cents)}</strong><span className="muted small">{plural(earnings.week.jobs, 'job')}</span></div>
-          <div><span className="muted small">All time</span><strong>{money(earnings.allTime.cents)}</strong><span className="muted small">{plural(earnings.allTime.jobs, 'job')}</span></div>
-        </section>
+        <Link to="/earnings" className="stats stats-link">
+          {[['today', 'Today'], ['week', 'This week'], ['month', 'This month']].map(([key, label]) => (
+            <div key={key}>
+              <span className="muted small">{label}</span>
+              <strong>{money(earnings.periods[key].earningsCents)}</strong>
+              <span className="muted small">{plural(earnings.periods[key].jobs, 'job')}</span>
+            </div>
+          ))}
+        </Link>
+      )}
+      {earnings && earnings.payouts.pendingCents > 0 && (
+        <Link to="/earnings" className="small">{money(earnings.payouts.pendingCents)} on its way to your bank ›</Link>
       )}
 
       <MapView
         center={here}
         markers={markers}
-        frame={[here, ...requests.slice(0, 5).map((j) => j.location)]}
+        circles={area ? [{ id: 'area', ...area }] : []}
+        frame={[here, ...(area ? circleBounds(area) : []), ...requests.slice(0, 5).map((j) => j.location)]}
         onPick={(p) => updateStatus(p)}
       />
-      <p className="hint">Tap the map to update your position.</p>
+      <p className="hint">The circle is your service area. Tap the map to update your current position.</p>
 
       <h3>Requests near you</h3>
       {!profile.online && <p className="muted">Go online to see requests.</p>}

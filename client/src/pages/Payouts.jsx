@@ -66,8 +66,8 @@ export default function Payouts() {
 
       {earnings && (
         <section className="stats two">
-          <div><span className="muted small">Paid to your bank</span><strong>{money(earnings.paidOutCents)}</strong></div>
-          <div><span className="muted small">On the way / waiting</span><strong>{money(earnings.pendingPayoutCents)}</strong></div>
+          <div><span className="muted small">Paid to your bank</span><strong>{money(earnings.payouts.paidOutCents)}</strong></div>
+          <div><span className="muted small">On the way / waiting</span><strong>{money(earnings.payouts.pendingCents)}</strong></div>
         </section>
       )}
 

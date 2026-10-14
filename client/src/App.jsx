@@ -9,6 +9,8 @@ import ProviderHome from './pages/ProviderHome.jsx';
 import JobPage from './pages/JobPage.jsx';
 import History from './pages/History.jsx';
 import Payouts from './pages/Payouts.jsx';
+import Earnings from './pages/Earnings.jsx';
+import WorkSettings from './pages/WorkSettings.jsx';
 import Verification from './pages/Verification.jsx';
 import Settings from './pages/Settings.jsx';
 import Bell from './components/Bell.jsx';
@@ -36,7 +38,7 @@ function Shell({ children }) {
           <nav>
             <NavLink to="/" end>Home</NavLink>
             <NavLink to="/history">{user.role === 'provider' ? 'Jobs' : 'My bookings'}</NavLink>
-            {user.role === 'provider' && <NavLink to="/payouts">Payouts</NavLink>}
+            {user.role === 'provider' && <NavLink to="/earnings">Earnings</NavLink>}
             <Bell />
             <NavLink to="/settings" className="icon-link" aria-label="Settings" title="Settings">⚙️</NavLink>
           </nav>
@@ -82,6 +84,8 @@ export default function App() {
         <Route path="/jobs/:id" element={<RequireUser><JobPage /></RequireUser>} />
         <Route path="/history" element={<RequireUser><History /></RequireUser>} />
         <Route path="/payouts" element={user?.role === 'provider' ? <Payouts /> : <Navigate to="/" replace />} />
+        <Route path="/earnings" element={user?.role === 'provider' ? <Earnings /> : <Navigate to="/" replace />} />
+        <Route path="/work" element={user?.role === 'provider' ? <WorkSettings /> : <Navigate to="/" replace />} />
         <Route path="/settings" element={<RequireUser><Settings /></RequireUser>} />
         <Route path="/verification" element={user?.role === 'provider' ? <Verification /> : <Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />

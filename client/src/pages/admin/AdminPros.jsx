@@ -45,6 +45,7 @@ export default function AdminPros() {
               <strong>{p.name}</strong> <span className="muted small">{icons(p.categories)}</span>
               <div className="muted small">{p.email} · joined {when(p.createdAt)}</div>
               {p.status === 'pending' && p.submittedAt && <div className="small">Submitted {when(p.submittedAt)}</div>}
+              {p.status === 'approved' && p.pendingCategories.length > 0 && <div className="small">Added {icons(p.pendingCategories)} - needs approval</div>}
             </div>
             <div className="right">
               <span className={`pill verify-${p.status}`}>{VERIFICATION_LABELS[p.status]}</span>

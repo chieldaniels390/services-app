@@ -22,6 +22,7 @@ let db;
 let uploadDir;
 let adminToken;
 let notifier;
+let clockTime = null; // null = real time; tests set it to check working hours
 const sentSms = [];
 const pushed = []; // { endpoint, headers, payload }
 const goneEndpoints = new Set();
@@ -45,6 +46,7 @@ before(async () => {
   ({ server, notifier } = createApp({
     db, geocoder, paystack, uploadDir, smsProvider,
     pushOptions: { allowEndpoint: (host) => host === 'push.test', sendNotification },
+    now: () => (clockTime ? new Date(clockTime) : new Date()),
   }));
   await new Promise((resolve) => server.listen(0, resolve));
   base = `http://localhost:${server.address().port}`;
@@ -77,7 +79,10 @@ async function register(role, extra = {}) {
 }
 
 // Most tests aren't about verification, so approve pros directly. The verification tests use the real flow.
-const approveDirectly = (pro) => db.prepare("UPDATE provider_profiles SET verification_status = 'approved' WHERE user_id = ?").run(pro.user.id);
+const approveDirectly = (pro) => {
+  db.prepare("UPDATE provider_profiles SET verification_status = 'approved' WHERE user_id = ?").run(pro.user.id);
+  db.prepare("UPDATE provider_categories SET status = 'approved' WHERE user_id = ?").run(pro.user.id);
+};
 
 async function onlinePro(categories = ['plumbing'], at = { lat: HOME.lat + 0.01, lng: HOME.lng }) {
   const pro = await register('provider', { categories });
@@ -178,8 +183,11 @@ describe('job lifecycle', () => {
     const me = await call('GET', '/me', { token: pro.token });
     assert.equal(me.body.provider.rating, 5);
     const earnings = await call('GET', '/provider/earnings', { token: pro.token });
-    assert.equal(earnings.body.allTime.cents, done.body.payoutCents);
-    assert.equal(earnings.body.pendingPayoutCents, done.body.payoutCents - 1000, 'labour payout waits for bank details; parts are not paid yet');
+    // Parts aren't paid yet, so only the job payout counts so far; it waits for bank details.
+    assert.equal(earnings.body.allTime.earningsCents, done.body.payoutCents - 1000);
+    assert.equal(earnings.body.allTime.jobs, 1);
+    assert.equal(earnings.body.allTime.feesCents, Math.round(100000 * 0.15));
+    assert.equal(earnings.body.payouts.pendingCents, done.body.payoutCents - 1000);
   });
 
   test('only one pro can win a job', async () => {
@@ -757,6 +765,160 @@ describe('notifications', () => {
     assert.ok(customerTypes.includes('refund_issued'));
     assert.ok(customerTypes.includes('dispute_resolved'));
     assert.ok(!customerTypes.includes('dispute_opened'), 'the person who reported it is not told about their own report');
+  });
+});
+
+// Pretoria is about 55 km from the Johannesburg test location.
+const PRETORIA = { lat: -25.7479, lng: 28.2293 };
+const MON_9_17 = { mon: { start: '09:00', end: '17:00' } };
+const feedIds = async (pro) => (await call('GET', '/provider/requests', { token: pro.token })).body.map((j) => j.id);
+
+describe('pro availability: hours, service area and trades', () => {
+  test('jobs are only offered inside working hours (for scheduled jobs, at the booked time)', async () => {
+    const pro = await onlinePro(['pest-control']);
+    assert.equal((await call('PUT', '/provider/hours', { token: pro.token, body: { workingHours: MON_9_17 } })).status, 200);
+    const customer = await register('customer');
+    try {
+      clockTime = '2026-10-12T08:00:00Z'; // Monday 10:00 in Johannesburg
+      const est = await call('POST', '/estimate', { token: customer.token, body: jobBody({ categoryId: 'pest-control' }) });
+      assert.ok(est.body.availableProviders >= 1);
+      const { id: daytime } = await book(customer, { categoryId: 'pest-control' });
+      assert.ok((await feedIds(pro)).includes(daytime));
+      assert.equal((await call('GET', '/me', { token: pro.token })).body.provider.availability.withinHours, true);
+
+      clockTime = '2026-10-12T16:00:00Z'; // Monday 18:00, after hours
+      assert.ok(!(await feedIds(pro)).includes(daytime), 'an ASAP job is not shown once the pro is off shift');
+      const after = await call('POST', '/estimate', { token: customer.token, body: jobBody({ categoryId: 'pest-control' }) });
+      assert.equal(after.body.availableProviders, 0);
+      assert.deepEqual((await call('GET', '/me', { token: pro.token })).body.provider.availability, { withinHours: false, hoursToday: '09:00-17:00' });
+
+      // Requested on Sunday for Monday 11:00: matched against Monday's hours.
+      clockTime = '2026-10-18T10:00:00Z';
+      const { id: scheduled } = await book(customer, { categoryId: 'pest-control', scheduledFor: '2026-10-19T09:00:00Z' });
+      assert.ok((await feedIds(pro)).includes(scheduled));
+      const { id: sundayAsap } = await book(customer, { categoryId: 'pest-control' });
+      assert.ok(!(await feedIds(pro)).includes(sundayAsap));
+    } finally {
+      clockTime = null;
+    }
+    // "Any time" again.
+    await call('PUT', '/provider/hours', { token: pro.token, body: { workingHours: null } });
+    assert.equal((await call('GET', '/provider/settings', { token: pro.token })).body.workingHours, null);
+  });
+
+  test('working hours are validated', async () => {
+    const pro = await onlinePro(['pest-control']);
+    const bad = (workingHours) => call('PUT', '/provider/hours', { token: pro.token, body: { workingHours } });
+    assert.equal((await bad({ mon: { start: '9', end: '17:00' } })).status, 400);
+    assert.equal((await bad({ mon: null, tue: null })).status, 400, 'at least one day');
+    assert.equal((await bad({ fri: { start: '22:00', end: '06:00' } })).status, 200, 'overnight is fine');
+  });
+
+  test('jobs are only offered inside the service area', async () => {
+    const pro = await onlinePro(['appliances']); // live location is in Johannesburg
+    const customer = await register('customer');
+    const { id } = await book(customer, { categoryId: 'appliances' });
+    assert.ok((await feedIds(pro)).includes(id), 'default: around the live location');
+
+    const area = (serviceArea) => call('PUT', '/provider/service-area', { token: pro.token, body: { serviceArea } });
+    assert.equal((await area({ ...PRETORIA, radiusKm: 0 })).status, 400);
+    assert.equal((await area({ ...PRETORIA, radiusKm: 500 })).status, 400);
+    assert.equal((await area({ lat: 'x', lng: 1, radiusKm: 10 })).status, 400);
+
+    assert.deepEqual((await area({ ...PRETORIA, radiusKm: 15 })).body.serviceArea, { ...PRETORIA, radiusKm: 15 });
+    assert.ok(!(await feedIds(pro)).includes(id), 'a Johannesburg job is outside a 15 km Pretoria area');
+    const est = await call('POST', '/estimate', { token: customer.token, body: jobBody({ categoryId: 'appliances' }) });
+    assert.ok(!est.body.nearby.some((p) => Math.abs(p.lat - HOME.lat - 0.01) < 0.003), 'not counted as nearby either');
+
+    await area({ ...PRETORIA, radiusKm: 70 });
+    assert.ok((await feedIds(pro)).includes(id));
+    await area(null);
+    assert.equal((await call('GET', '/provider/settings', { token: pro.token })).body.serviceArea, null);
+  });
+
+  test('a verified pro can add trades, but new ones need admin approval', async () => {
+    const pro = await onlinePro(['painting']);
+    const customer = await register('customer');
+    const { id } = await book(customer, { categoryId: 'gardening' });
+
+    const updated = await call('PUT', '/provider/trades', { token: pro.token, body: { categories: ['painting', 'gardening', 'nonsense'] } });
+    assert.deepEqual(updated.body.trades, [{ id: 'painting', status: 'approved' }, { id: 'gardening', status: 'pending' }]);
+    assert.deepEqual((await call('GET', '/me', { token: pro.token })).body.provider.pendingCategories, ['gardening']);
+    assert.ok(!(await feedIds(pro)).includes(id));
+    assert.equal((await call('POST', `/jobs/${id}/accept`, { token: pro.token })).status, 403);
+
+    const queue = await admin('GET', '/providers?status=pending');
+    assert.deepEqual(queue.body.find((p) => p.id === pro.user.id)?.pendingCategories, ['gardening']);
+    const decided = await admin('POST', `/providers/${pro.user.id}/trades`, { decision: 'approve' });
+    assert.deepEqual(decided.body.pendingCategories, []);
+    assert.ok((await feedIds(pro)).includes(id));
+
+    // Removing trades, and rejecting a new one.
+    await call('PUT', '/provider/trades', { token: pro.token, body: { categories: ['gardening', 'cleaning'] } });
+    await admin('POST', `/providers/${pro.user.id}/trades`, { decision: 'reject' });
+    assert.deepEqual((await call('GET', '/provider/settings', { token: pro.token })).body.trades, [{ id: 'gardening', status: 'approved' }]);
+    assert.equal((await call('PUT', '/provider/trades', { token: pro.token, body: { categories: [] } })).status, 400);
+    await notifier.idle();
+    const types = (await call('GET', '/notifications', { token: pro.token })).body.items.map((n) => n.type);
+    assert.ok(types.includes('trades_approved') && types.includes('trades_rejected'));
+  });
+
+  test('a new pro\'s trades are approved together with their verification', async () => {
+    const pro = await register('provider', { categories: ['locksmith', 'handyman'] });
+    assert.deepEqual(pro.user.provider.categories, []);
+    assert.deepEqual(pro.user.provider.pendingCategories, ['locksmith', 'handyman']);
+    db.prepare("INSERT INTO provider_documents (user_id, kind, file_name, mime, size_bytes) VALUES (?, 'id', 'x', 'image/png', 1), (?, 'certificate', 'y', 'image/png', 1), (?, 'selfie', 'z', 'image/png', 1)")
+      .run(pro.user.id, pro.user.id, pro.user.id);
+    await admin('POST', `/providers/${pro.user.id}/verification`, { decision: 'approve' });
+    assert.deepEqual((await call('GET', '/me', { token: pro.token })).body.provider.categories, ['locksmith', 'handyman']);
+  });
+});
+
+describe('earnings dashboard', () => {
+  test('today, this week and this month, with fees, a daily series and payout history', async () => {
+    const pro = await onlinePro(['hvac']);
+    await call('PUT', '/provider/payout-account', { token: pro.token, body: { bankCode: '470010', accountNumber: '1234567890', accountName: 'Pro' } });
+    const customer = await register('customer');
+    const finish = async (completedAt) => {
+      const { id } = await book(customer, { categoryId: 'hvac' });
+      await call('POST', `/jobs/${id}/accept`, { token: pro.token });
+      for (const status of ['en_route', 'arrived', 'in_progress', 'completed']) await call('POST', `/jobs/${id}/status`, { token: pro.token, body: { status } });
+      db.prepare('UPDATE jobs SET completed_at = ? WHERE id = ?').run(completedAt, id);
+      return db.prepare('SELECT * FROM jobs WHERE id = ?').get(id);
+    };
+    // "Now" is Thursday 15 October 2026, 10:00 in Johannesburg.
+    const today = await finish('2026-10-15 06:00:00'); // today 08:00
+    const monday = await finish('2026-10-12 08:00:00'); // this week
+    const lastMonth = await finish('2026-09-30 21:59:00'); // 23:59 on 30 Sept: last month, but in the 30-day chart
+    const cancelled = await finish('2026-10-15 07:00:00'); // payout cancelled after a dispute
+    db.prepare("UPDATE payouts SET status = 'cancelled' WHERE job_id = ?").run(cancelled.id);
+
+    try {
+      clockTime = '2026-10-15T08:00:00Z';
+      const { body } = await call('GET', '/provider/earnings', { token: pro.token });
+      const earned = (j) => j.payout_cents;
+      assert.deepEqual(body.periods.today, {
+        earningsCents: earned(today), jobs: 2, feesCents: today.platform_fee_cents + cancelled.platform_fee_cents,
+        customerPaidCents: today.final_cents + cancelled.final_cents,
+      });
+      assert.equal(body.periods.week.earningsCents, earned(today) + earned(monday));
+      assert.equal(body.periods.week.jobs, 3);
+      assert.equal(body.periods.month.jobs, 3, 'the 30 September job belongs to last month');
+      assert.equal(body.allTime.jobs, 4);
+      assert.equal(body.allTime.earningsCents, earned(today) + earned(monday) + earned(lastMonth));
+
+      assert.equal(body.daily.length, 30);
+      assert.equal(body.daily.at(-1).date, '2026-10-15');
+      assert.equal(body.daily.at(-1).earningsCents, earned(today));
+      assert.equal(body.daily.find((d) => d.date === '2026-09-30').earningsCents, earned(lastMonth));
+
+      assert.equal(body.recentJobs.length, 4);
+      assert.equal(body.recentJobs.find((j) => j.id === cancelled.id).payoutStatus, 'cancelled');
+      assert.equal(body.recentJobs.find((j) => j.id === today.id).feeCents, today.platform_fee_cents);
+      assert.equal(body.payouts.pendingCents, earned(today) + earned(monday) + earned(lastMonth), 'transfers still processing');
+    } finally {
+      clockTime = null;
+    }
   });
 });
 

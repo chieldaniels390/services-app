@@ -101,6 +101,8 @@ export function createVerificationService({ db, uploadDir, notify, notifyAdmins,
       db.prepare(`
         UPDATE provider_profiles SET verification_status = 'approved', verification_note = ?, verified_at = datetime('now'), verified_by = ?
         WHERE user_id = ?`).run(note?.trim() || null, adminId, userId);
+      // Approving the pro approves the trades they applied with.
+      db.prepare("UPDATE provider_categories SET status = 'approved' WHERE user_id = ?").run(userId);
     } else if (decision === 'reject') {
       if (!note?.trim()) throw badRequest('Tell the pro why, so they can fix it');
       db.prepare(`

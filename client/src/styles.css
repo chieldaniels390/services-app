@@ -420,3 +420,51 @@ label.radio input { width: auto; }
 .setting { display: flex; gap: 1rem; align-items: center; padding: 0.75rem 0; border-top: 1px solid var(--border); }
 .setting p { margin: 0.15rem 0 0; }
 .toggle:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Work settings */
+.work-settings, .earnings { display: flex; flex-direction: column; gap: 0.75rem; max-width: 760px; margin: 0 auto; }
+.work-settings .card > .btn, .work-settings .card > .row { margin-top: 0.75rem; }
+.chip-note { margin-left: 0.35rem; font-size: 0.7rem; font-weight: 700; color: #92400e; }
+.saved { color: var(--success); font-weight: 600; margin: 0.5rem 0 0; }
+.presets { margin: 0.75rem 0 0.25rem; }
+.hours { display: flex; flex-direction: column; margin-top: 0.5rem; }
+.hours-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.45rem 0; border-top: 1px solid var(--border); flex-wrap: wrap; }
+.hours-row label.radio { margin: 0; min-width: 8rem; font-weight: 600; }
+.hours-row.off label.radio { color: var(--muted); }
+.hours-row .times { display: flex; align-items: center; gap: 0.4rem; }
+.hours-row input[type=time] { width: auto; padding: 0.4rem 0.5rem; }
+.area-map { height: 300px; margin: 0.5rem 0; }
+.radius { margin: 0.5rem 0 0; }
+.radius input[type=range] { padding: 0; accent-color: var(--brand); }
+
+/* Earnings */
+:root { --chart-bar: #0d9488; } /* validated for contrast and colour-vision safety on light and dark surfaces */
+.stat-grid.three { grid-template-columns: repeat(3, 1fr); }
+.stat-grid.two-col { grid-template-columns: repeat(2, 1fr); margin-top: 0.5rem; }
+.stat-grid.two-col > div { background: var(--bg); }
+.stat-tile { gap: 0.1rem; }
+.stat-tile strong { font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+@media (max-width: 520px) { .stat-grid.three { grid-template-columns: 1fr 1fr; } .stat-grid.three > :first-child { grid-column: 1 / -1; } }
+.stats-link { text-decoration: none; color: var(--text); }
+.chart { position: relative; margin-top: 0.5rem; }
+.chart svg { display: block; overflow: visible; }
+.chart .bar { fill: var(--chart-bar); transition: opacity 0.12s; }
+.chart .bar.dim { opacity: 0.45; }
+.chart .grid { stroke: var(--border); stroke-width: 1; }
+.chart .axis { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart .hit { fill: transparent; cursor: default; outline: none; }
+.chart .hit:focus-visible { stroke: var(--brand); stroke-width: 2; }
+.chart-tip {
+  position: absolute; top: 0; transform: translateX(-50%); pointer-events: none; display: flex; flex-direction: column; align-items: center;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 0.35rem 0.6rem; box-shadow: var(--shadow); white-space: nowrap;
+}
+.table-wrap.flat { border: none; }
+.trade { display: inline-block; margin-right: 0.6rem; }
+.trade.pending { color: #92400e; font-weight: 700; }
+.trade.pending::after { content: ' (new)'; font-weight: 400; }
+
+.job-earnings { list-style: none; margin: 0; padding: 0; }
+.job-earnings li { display: flex; gap: 0.75rem; align-items: flex-start; padding: 0.65rem 0; border-top: 1px solid var(--border); }
+.job-earnings li:first-child { border-top: none; }
+.job-earnings a { font-weight: 600; text-decoration: none; }
+.job-earnings .right { display: flex; flex-direction: column; align-items: flex-end; gap: 0.25rem; white-space: nowrap; font-variant-numeric: tabular-nums; }

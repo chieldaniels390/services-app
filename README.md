@@ -26,7 +26,9 @@ Customers get an upfront price and pay by card through **Paystack** when they bo
 
 **Pros**
 - Sign up with the services you offer, then **get verified**: upload an ID, a trade certificate or licence, and a selfie. Only approved pros can go online, receive requests or accept jobs
-- Go online/offline
+- Go online/offline, and set **working hours** (per day, including overnight shifts), a **service area** (tap a centre on the map and choose a radius) and **trades**. Several trades are allowed; one added after verification needs admin approval
+- Requests only reach pros who are online, approved for that trade, within their working hours (at the booked time for scheduled jobs) and whose service area covers the job
+- **Earnings dashboard:** today / this week / this month (South African time) with completed jobs and platform fees, a 30-day daily chart (with a table view), recent jobs with each fee, and payout totals
 - New requests nearby **pop up instantly** with distance, ETA and your payout (exact address hidden until you accept)
 - First pro to accept wins (atomic; others see the job disappear)
 - Step through the job, add materials cost on completion, open navigation in Google Maps
@@ -66,6 +68,23 @@ Typical 2025/26 South African rates, set in `server/src/categories.js` (amounts 
 | Gardening | R150 | R180 | R330 |
 
 Standard jobs are quoted at 2 hours and big jobs at 4. Rates differ between cities and suburbs, so check them against local competitors before launch.
+
+## Who gets offered a job
+
+A pro is offered a request when **all** of these are true:
+
+1. They're **online** and **verified**, and not busy with another job.
+2. The job's trade is one of their **approved trades**. When a verified pro adds a trade, it stays *pending* until an admin approves it on the pro's admin page, since their certificate may not cover it. A new pro's trades are approved together with their verification.
+3. The job is inside their **service area**: within their chosen radius (1-100 km) of the centre they picked. If they haven't set one, it's `DISPATCH_RADIUS_KM` around their live location.
+4. The job time is inside their **working hours**: now for ASAP jobs, the booked time for scheduled ones. Hours are per weekday in `TIMEZONE`, and a shift can run past midnight (e.g. 22:00-06:00). With no hours set, a pro works any time.
+
+The same rules decide the customer's "N pros nearby" count, and the pro's request list, which updates as their shift starts and ends. If a pro is online but off shift, their dashboard says so.
+
+| Work settings | Earnings |
+| --- | --- |
+| ![](docs/screenshots/work-settings.png) | ![](docs/screenshots/earnings.png) |
+
+Earnings are what the pro actually receives: their payouts, excluding any an admin cancelled in a dispute. Parts count once the customer has paid for them. "This week" starts on Monday.
 
 ## Notifications
 
@@ -220,6 +239,9 @@ server/src
   admin.js       admin panel queries
   notifications.js  every notification's wording + delivery (in-app, push, SMS)
   push.js        Web Push subscriptions and sending
+  providers.js   pro work settings: trades, working hours, service area
+  earnings.js    pro earnings dashboard
+  time.js        time zones, working-hours checks, period starts
   sms/           SMS provider adapters (console, twilio, bulksms) - add your own here
   create-admin.js  CLI to create an admin account
   geocoder.js    address search / reverse lookup (Nominatim), throttled + cached
@@ -248,7 +270,7 @@ Demo accounts:
 | --- | --- |
 | admin@demo.com | Admin panel |
 | customer@demo.com | Customer |
-| plumber@demo.com | Plumbing, Heating & AC |
+| plumber@demo.com | Plumbing, Aircon & Heating. Has five weeks of earnings history for the dashboard |
 | electrician@demo.com | Electrical, Appliances |
 | cleaner@demo.com | Cleaning |
 | locksmith@demo.com | Locksmith, Handyman |
@@ -270,6 +292,9 @@ npm start         # serves API + app on PORT (default 4000)
 | --- | --- | --- |
 | `PORT` | `4000` | |
 | `DB_FILE` | `services.db` | SQLite file |
+| `TIMEZONE` | `Africa/Johannesburg` | Working hours and today / week / month earnings use this |
+| `DISPATCH_RADIUS_KM` | `30` | Service radius for pros who haven't set their own area |
+| `MAX_SERVICE_RADIUS_KM` | `100` | Largest radius a pro can choose |
 | `UPLOAD_DIR` | `uploads` | Where verification documents are stored. Keep private and backed up |
 | `TOKEN_SECRET` | dev value | **Set this in production** |
 | `CURRENCY` | `ZAR` | ISO code used for display |
@@ -282,7 +307,6 @@ npm start         # serves API + app on PORT (default 4000)
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | generated | Web Push keys. Set them if you run more than one server |
 | `VAPID_SUBJECT` | `mailto:support@example.com` | Contact address for push services |
 | `PAYSTACK_BASE_URL` | `https://api.paystack.co` | Only changed for tests |
-| `DISPATCH_RADIUS_KM` | `30` | How far away pros get offered a job |
 | `DEFAULT_LAT` / `DEFAULT_LNG` | Johannesburg | Default map centre |
 | `MAP_TILE_URL` | CARTO Dark Matter | Any XYZ tile URL. For CARTO's light style use `https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png` with `MAP_TILES_DARK=false` |
 | `MAP_TILE_ATTRIBUTION` | OpenStreetMap + CARTO credit | Must match the tile provider's terms |

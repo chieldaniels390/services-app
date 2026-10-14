@@ -9,7 +9,10 @@ export function createAdminService({ db, jobs, verification }) {
   function overview() {
     const one = (sql, ...args) => Object.values(db.prepare(sql).get(...args))[0];
     return {
-      pendingVerifications: one("SELECT COUNT(*) FROM provider_profiles WHERE verification_status = 'pending'"),
+      // New pros to verify, plus verified pros who added a trade that needs checking.
+      pendingVerifications: one(`
+        SELECT COUNT(*) FROM provider_profiles p WHERE p.verification_status = 'pending'
+          OR (p.verification_status = 'approved' AND EXISTS (SELECT 1 FROM provider_categories pc WHERE pc.user_id = p.user_id AND pc.status = 'pending'))`),
       openDisputes: one("SELECT COUNT(*) FROM disputes WHERE status = 'open'"),
       activeJobs: one("SELECT COUNT(*) FROM jobs WHERE status IN ('requested', 'accepted', 'en_route', 'arrived', 'in_progress')"),
       jobsToday: one("SELECT COUNT(*) FROM jobs WHERE created_at >= datetime('now', 'start of day') AND status != 'awaiting_payment'"),
@@ -24,19 +27,27 @@ export function createAdminService({ db, jobs, verification }) {
     const where = ['u.role = ?'];
     const args = ['provider'];
     if (id) { where.push('u.id = ?'); args.push(id); }
-    if (status) { where.push('p.verification_status = ?'); args.push(status); }
+    if (status === 'pending') {
+      where.push(`(p.verification_status = 'pending' OR (p.verification_status = 'approved'
+        AND EXISTS (SELECT 1 FROM provider_categories pc WHERE pc.user_id = u.id AND pc.status = 'pending')))`);
+    } else if (status) {
+      where.push('p.verification_status = ?');
+      args.push(status);
+    }
     if (q) { where.push('(u.name LIKE ? OR u.email LIKE ?)'); args.push(`%${q}%`, `%${q}%`); }
     return db.prepare(`
       SELECT u.id, u.name, u.email, u.phone, u.created_at AS createdAt, p.verification_status AS status,
         p.verification_submitted_at AS submittedAt, p.is_online AS online, p.rating_sum, p.rating_count,
         (SELECT GROUP_CONCAT(category_id) FROM provider_categories WHERE user_id = u.id) AS categories,
+        (SELECT GROUP_CONCAT(category_id) FROM provider_categories WHERE user_id = u.id AND status = 'pending') AS pending_categories,
         (SELECT COUNT(*) FROM jobs WHERE provider_id = u.id AND status = 'completed') AS completedJobs
       FROM users u JOIN provider_profiles p ON p.user_id = u.id
       WHERE ${where.join(' AND ')}
       ORDER BY CASE p.verification_status WHEN 'pending' THEN 0 ELSE 1 END, p.verification_submitted_at, u.id DESC
       LIMIT 200`).all(...args)
-      .map(({ rating_sum: sum, rating_count: count, categories, online, ...p }) => ({
+      .map(({ rating_sum: sum, rating_count: count, categories, pending_categories: pendingCats, online, ...p }) => ({
         ...p, online: !!online, rating: ratingOf(sum, count), ratingCount: count, categories: categories?.split(',') ?? [],
+        pendingCategories: pendingCats?.split(',') ?? [],
       }));
   }
 
@@ -47,6 +58,8 @@ export function createAdminService({ db, jobs, verification }) {
     return {
       ...pro,
       bio: p.bio,
+      workingHours: p.working_hours ? JSON.parse(p.working_hours) : null,
+      serviceArea: p.service_lat != null ? { lat: p.service_lat, lng: p.service_lng, radiusKm: p.service_radius_km } : null,
       verification: verification.statusFor(id),
       payoutAccount: p.payout_recipient_code ? { bankName: p.payout_bank_name, last4: p.payout_account_last4, accountName: p.payout_account_name } : null,
       recentJobs: db.prepare(`${jobs.JOB_SELECT} WHERE j.provider_id = ? ORDER BY j.id DESC LIMIT 20`).all(id).map(jobSummary),

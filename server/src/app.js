@@ -16,7 +16,9 @@ import { DISPUTE_REASONS } from './disputes.js';
 import { createNotifier } from './notifications.js';
 import { createPaystack } from './paystack.js';
 import { toE164 } from './phone.js';
+import { createProviderService } from './providers.js';
 import { createPushService } from './push.js';
+import { createEarningsService } from './earnings.js';
 import { createSmsProvider } from './sms/index.js';
 import { DOCUMENT_KINDS, MAX_DOCUMENT_BYTES, createVerificationService } from './verification.js';
 import { JOB_SIZES } from './pricing.js';
@@ -30,6 +32,7 @@ export function createApp({
   uploadDir = config.uploadDir,
   smsProvider = createSmsProvider(config.sms.provider),
   pushOptions = {},
+  now = () => new Date(),
 }) {
   const app = express();
   const server = createServer(app);
@@ -42,7 +45,9 @@ export function createApp({
   const notifier = createNotifier({
     db, emit: notify, push, sms: smsProvider, appUrl: config.appUrl, defaultCountryCode: config.sms.defaultCountryCode,
   });
-  const jobs = createJobService({ db, notify, paystack, notifyAdmins, notifier });
+  const jobs = createJobService({ db, notify, paystack, notifyAdmins, notifier, now });
+  const providers = createProviderService({ db, notify, notifyAdmins, notifier, now });
+  const earnings = createEarningsService({ db, now });
   const { payments, disputes } = jobs;
   const verification = createVerificationService({ db, uploadDir, notify, notifyAdmins, notifier });
   const admin = createAdminService({ db, jobs, verification });
@@ -54,7 +59,8 @@ export function createApp({
     const user = { ...rest, smsEnabled: smsEnabled !== 0 };
     if (user.role !== 'provider') return user;
     const p = db.prepare('SELECT * FROM provider_profiles WHERE user_id = ?').get(user.id);
-    const categories = db.prepare('SELECT category_id FROM provider_categories WHERE user_id = ?').all(user.id).map((r) => r.category_id);
+    const settings = providers.settingsFor(user.id);
+    const categories = settings.trades.filter((t) => t.status === 'approved').map((t) => t.id);
     return {
       ...user,
       provider: {
@@ -64,6 +70,10 @@ export function createApp({
         rating: ratingOf(p.rating_sum, p.rating_count),
         ratingCount: p.rating_count,
         categories,
+        pendingCategories: settings.trades.filter((t) => t.status === 'pending').map((t) => t.id),
+        workingHours: settings.workingHours,
+        serviceArea: settings.serviceArea,
+        availability: settings.availability,
         verificationStatus: p.verification_status,
         payoutAccount: p.payout_recipient_code
           ? { bankName: p.payout_bank_name, last4: p.payout_account_last4, accountName: p.payout_account_name }
@@ -135,6 +145,7 @@ export function createApp({
     disputeReasons: DISPUTE_REASONS,
     push: { publicKey: push.publicKey },
     map: config.map,
+    defaultRadiusKm: config.dispatchRadiusKm,
     sms: { enabled: Boolean(smsProvider) },
   }));
 
@@ -167,7 +178,8 @@ export function createApp({
       const userId = Number(lastInsertRowid);
       if (role === 'provider') {
         db.prepare('INSERT INTO provider_profiles (user_id, bio) VALUES (?, ?)').run(userId, String(bio).slice(0, 500));
-        const add = db.prepare('INSERT INTO provider_categories (user_id, category_id) VALUES (?, ?)');
+        // Pending until the pro's verification is approved.
+        const add = db.prepare("INSERT INTO provider_categories (user_id, category_id, status) VALUES (?, ?, 'pending')");
         for (const c of validCategories) add.run(userId, c);
       }
       return userId;
@@ -304,7 +316,14 @@ export function createApp({
   });
 
   api.get('/provider/requests', auth('provider'), (req, res) => res.json(jobs.openRequestsFor(req.user)));
-  api.get('/provider/earnings', auth('provider'), (req, res) => res.json(jobs.earnings(req.user)));
+  api.get('/provider/earnings', auth('provider'), (req, res) => res.json(earnings.dashboard(req.user.id)));
+
+  // --- Work settings: trades, hours, service area ------------------------
+
+  api.get('/provider/settings', auth('provider'), (req, res) => res.json(providers.settingsFor(req.user.id)));
+  api.put('/provider/trades', auth('provider'), (req, res) => res.json(providers.setTrades(req.user.id, req.body?.categories)));
+  api.put('/provider/hours', auth('provider'), (req, res) => res.json(providers.setHours(req.user.id, req.body?.workingHours)));
+  api.put('/provider/service-area', auth('provider'), (req, res) => res.json(providers.setServiceArea(req.user.id, req.body?.serviceArea)));
   api.get('/provider/banks', auth('provider'), async (_req, res) => res.json(await payments.banks()));
   api.put('/provider/payout-account', auth('provider'), async (req, res) => {
     await payments.setPayoutAccount(req.user.id, req.body ?? {});
@@ -346,6 +365,10 @@ export function createApp({
   adminApi.get('/providers/:id', (req, res) => res.json(admin.providerDetail(idParam(req))));
   adminApi.post('/providers/:id/verification', (req, res) => {
     verification.decide(req.user.id, idParam(req), req.body ?? {});
+    res.json(admin.providerDetail(idParam(req)));
+  });
+  adminApi.post('/providers/:id/trades', (req, res) => {
+    providers.decideTrades(idParam(req), req.body?.decision);
     res.json(admin.providerDetail(idParam(req)));
   });
   adminApi.get('/jobs', (req, res) => res.json(admin.listJobs(req.query)));

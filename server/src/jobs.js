@@ -4,6 +4,7 @@ import { HttpError, badRequest, conflict, forbidden, notFound } from './errors.j
 import { distanceKm, etaMinutes } from './geo.js';
 import { DISPUTE_REASONS, createDisputeService } from './disputes.js';
 import { createPaymentService } from './payments.js';
+import { isWithinHours } from './time.js';
 import { JOB_SIZES, quote, settle, surgeMultiplier } from './pricing.js';
 
 export const ACTIVE_STATUSES = ['accepted', 'en_route', 'arrived', 'in_progress'];
@@ -36,7 +37,26 @@ export const ratingOf = (sum, count) => (count ? Math.round((sum / count) * 10) 
 
 const silentNotifier = { notify: () => {} };
 
-export function createJobService({ db, notify, paystack, notifyAdmins = () => {}, notifier = silentNotifier }) {
+export const parseSchedule = (json) => (json ? JSON.parse(json) : null);
+
+/**
+ * Does this pro cover a job at this place and time? The service area is the centre the pro picked
+ * (falling back to their live location) and their radius (falling back to DISPATCH_RADIUS_KM).
+ */
+export function coversJob(profile, point, at) {
+  const center = profile.service_lat != null
+    ? { lat: profile.service_lat, lng: profile.service_lng }
+    : profile.lat != null ? { lat: profile.lat, lng: profile.lng } : null;
+  if (!center) return false;
+  const radiusKm = profile.service_radius_km ?? config.dispatchRadiusKm;
+  return distanceKm(center, point) <= radiusKm && isWithinHours(parseSchedule(profile.working_hours), at, config.timezone);
+}
+
+export function createJobService({
+  db, notify, paystack, notifyAdmins = () => {}, notifier = silentNotifier, now = () => new Date(),
+}) {
+  // Scheduled jobs are matched against the pro's hours at the booked time, not when the request was made.
+  const jobTime = (row) => (row.scheduled_for ? new Date(row.scheduled_for) : now());
   const payments = createPaymentService({
     db,
     paystack,
@@ -153,19 +173,20 @@ export function createJobService({ db, notify, paystack, notifyAdmins = () => {}
   }
 
   /** Online pros offering a category near a point, nearest first. Busy pros are excluded. */
-  function availableProviders(categoryId, point, radiusKm = config.dispatchRadiusKm) {
+  /** Pros who would be offered a job for this trade, place and time: online, approved, free, in range and on shift. Nearest first. */
+  function availableProviders(categoryId, point, at = now()) {
     const rows = db.prepare(`
-      SELECT u.id, u.name, p.lat, p.lng, p.rating_sum, p.rating_count
+      SELECT u.id, u.name, p.*
       FROM provider_profiles p
       JOIN users u ON u.id = p.user_id
-      JOIN provider_categories pc ON pc.user_id = p.user_id AND pc.category_id = ?
+      JOIN provider_categories pc ON pc.user_id = p.user_id AND pc.category_id = ? AND pc.status = 'approved'
       WHERE p.is_online = 1 AND p.lat IS NOT NULL
         AND p.verification_status = 'approved'
         AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.provider_id = p.user_id AND j.status IN (${ACTIVE_SQL}))`)
       .all(categoryId);
     return rows
+      .filter((r) => coversJob(r, point, at))
       .map((r) => ({ ...r, distanceKm: distanceKm(point, r) }))
-      .filter((r) => r.distanceKm <= radiusKm)
       .sort((a, b) => a.distanceKm - b.distanceKm);
   }
 
@@ -175,12 +196,13 @@ export function createJobService({ db, notify, paystack, notifyAdmins = () => {}
       .filter((j) => distanceKm(point, j) <= config.dispatchRadiusKm).length;
   }
 
-  function estimate({ categoryId, size, lat, lng }) {
+  function estimate({ categoryId, size, lat, lng, scheduledFor }) {
     const category = getCategory(categoryId);
     if (!category) throw badRequest('Unknown service category');
     if (!JOB_SIZES[size]) throw badRequest('Unknown job size');
     const point = { lat, lng };
-    const providers = availableProviders(categoryId, point);
+    const at = scheduledFor && !Number.isNaN(Date.parse(scheduledFor)) ? new Date(scheduledFor) : now();
+    const providers = availableProviders(categoryId, point, at);
     const surge = surgeMultiplier(openRequestsNear(categoryId, point) + 1, providers.length);
     return {
       ...quote(category, size, surge),
@@ -197,7 +219,7 @@ export function createJobService({ db, notify, paystack, notifyAdmins = () => {}
   }
 
   function dispatch(row) {
-    const offered = availableProviders(row.category_id, row);
+    const offered = availableProviders(row.category_id, row, jobTime(row));
     for (const p of offered) {
       const dto = toDto(row, { id: p.id, role: 'provider' });
       notify(p.id, 'job:offer', { ...dto, distanceKm: round1(p.distanceKm), etaMinutes: etaMinutes(p.distanceKm) });
@@ -279,19 +301,20 @@ export function createJobService({ db, notify, paystack, notifyAdmins = () => {}
     return toDto(row, user);
   }
 
+  // Only approved trades count: one added after verification waits for an admin to check it.
   const offersCategory = (userId, categoryId) =>
-    !!db.prepare('SELECT 1 FROM provider_categories WHERE user_id = ? AND category_id = ?').get(userId, categoryId);
+    !!db.prepare("SELECT 1 FROM provider_categories WHERE user_id = ? AND category_id = ? AND status = 'approved'").get(userId, categoryId);
 
   function openRequestsFor(provider) {
     const profile = db.prepare('SELECT * FROM provider_profiles WHERE user_id = ?').get(provider.id);
     if (!profile?.is_online || profile.lat == null || profile.verification_status !== 'approved') return [];
     return db.prepare(`${JOB_SELECT}
       WHERE j.status = 'requested' AND j.customer_id != ?
-        AND j.category_id IN (SELECT category_id FROM provider_categories WHERE user_id = ?)
+        AND j.category_id IN (SELECT category_id FROM provider_categories WHERE user_id = ? AND status = 'approved')
       ORDER BY j.id DESC`)
       .all(provider.id, provider.id)
+      .filter((row) => coversJob(profile, row, jobTime(row)))
       .map((row) => ({ row, km: distanceKm(profile, row) }))
-      .filter(({ km }) => km <= config.dispatchRadiusKm)
       .sort((a, b) => a.km - b.km)
       .map(({ row, km }) => ({ ...toDto(row, provider), distanceKm: round1(km), etaMinutes: etaMinutes(km) }));
   }
@@ -434,26 +457,11 @@ export function createJobService({ db, notify, paystack, notifyAdmins = () => {}
     if (job) notify(job.customer_id, 'provider:location', { jobId: job.id, ...point });
   }
 
-  function earnings(provider) {
-    const sum = (where) => db.prepare(`
-      SELECT COALESCE(SUM(payout_cents), 0) AS cents, COUNT(*) AS jobs
-      FROM jobs WHERE provider_id = ? AND status = 'completed' ${where}`).get(provider.id);
-    const payoutTotal = (statuses) => db.prepare(`
-      SELECT COALESCE(SUM(amount_cents), 0) AS cents FROM payouts
-      WHERE provider_id = ? AND status IN (${statuses.map((s) => `'${s}'`).join(', ')})`).get(provider.id).cents;
-    return {
-      today: sum("AND completed_at >= datetime('now', 'start of day')"),
-      week: sum("AND completed_at >= datetime('now', '-7 days')"),
-      allTime: sum(''),
-      paidOutCents: payoutTotal(['paid']),
-      pendingPayoutCents: payoutTotal(['awaiting_details', 'sending', 'processing', 'failed', 'on_hold']),
-      currency: config.currency,
-    };
-  }
+
 
   return {
     estimate, create, listForUser, getForUser, openRequestsFor, accept, advance, cancel, rate,
-    messages, sendMessage, relayLocation, earnings, payBooking, confirmPayment, payMaterials, payments,
+    messages, sendMessage, relayLocation, payBooking, confirmPayment, payMaterials, payments,
     disputes, toDto, getJobRow, JOB_SELECT,
   };
 }

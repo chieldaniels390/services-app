@@ -16,8 +16,11 @@ export const config = {
     secretKey: process.env.PAYSTACK_SECRET_KEY ?? '',
     baseUrl: process.env.PAYSTACK_BASE_URL ?? 'https://api.paystack.co',
   },
-  // Online pros within this radius of a job are offered it.
+  // Service radius for pros who haven't set their own service area (around their live location).
   dispatchRadiusKm: Number(process.env.DISPATCH_RADIUS_KM ?? 30),
+  maxServiceRadiusKm: Number(process.env.MAX_SERVICE_RADIUS_KM ?? 100),
+  // Working hours and "today / this week / this month" earnings use this time zone.
+  timezone: process.env.TIMEZONE ?? 'Africa/Johannesburg',
   defaultCenter: {
     lat: Number(process.env.DEFAULT_LAT ?? -26.2041),
     lng: Number(process.env.DEFAULT_LNG ?? 28.0473),

@@ -7,6 +7,12 @@ import { STATUS_LABELS, money, when } from '../../format.js';
 import { useSession } from '../../session.jsx';
 import { VERIFICATION_LABELS } from './AdminPros.jsx';
 
+const DAY_NAMES = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' };
+const hoursSummary = (schedule) => Object.entries(DAY_NAMES)
+  .filter(([d]) => schedule[d])
+  .map(([d, label]) => `${label} ${schedule[d].start}-${schedule[d].end}`)
+  .join(', ') || 'No working days set';
+
 export default function AdminPro({ onChange }) {
   const id = Number(useParams().id);
   const { config, categories } = useSession();
@@ -37,6 +43,19 @@ export default function AdminPro({ onChange }) {
     }
   }
 
+  async function decideTrades(decision) {
+    setBusy(true);
+    setError('');
+    try {
+      setPro(await api(`/admin/providers/${id}/trades`, { method: 'POST', body: { decision } }));
+      onChange();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!pro) return <p className={error ? 'error' : 'muted'}>{error || 'Loading…'}</p>;
   const v = pro.verification;
   return (
@@ -47,11 +66,35 @@ export default function AdminPro({ onChange }) {
         <div className="grow">
           <h2>{pro.name} <span className={`pill verify-${v.status}`}>{VERIFICATION_LABELS[v.status]}</span></h2>
           <p className="muted small">{pro.email} · {pro.phone ?? 'no phone'} · joined {when(pro.createdAt)}</p>
-          <p className="small">{pro.categories.map((c) => { const cat = categories.find((x) => x.id === c); return `${cat?.icon} ${cat?.name}`; }).join(' · ')}</p>
+          <p className="small">
+            {pro.categories.map((c) => {
+              const cat = categories.find((x) => x.id === c);
+              return <span key={c} className={`trade ${pro.pendingCategories.includes(c) ? 'pending' : ''}`}>{cat?.icon} {cat?.name}</span>;
+            })}
+          </p>
+          <p className="muted small">
+            {pro.serviceArea ? `Works within ${pro.serviceArea.radiusKm} km of a chosen centre` : 'Works around their live location (default radius)'}
+            {' · '}{pro.workingHours ? hoursSummary(pro.workingHours) : 'Any time'}
+          </p>
           {pro.bio && <p className="muted">“{pro.bio}”</p>}
           {v.status === 'approved' && <Stars value={pro.rating} count={pro.ratingCount} />}
         </div>
       </section>
+
+      {v.status === 'approved' && pro.pendingCategories.length > 0 && (
+        <section className="card highlight">
+          <h3>New trades to approve</h3>
+          <p>
+            {pro.name} added{' '}
+            <strong>{pro.pendingCategories.map((c) => categories.find((x) => x.id === c)?.name).join(', ')}</strong>.
+            Check their certificate below covers {pro.pendingCategories.length > 1 ? 'these trades' : 'this trade'} before approving.
+          </p>
+          <div className="row">
+            <button className="btn primary grow" disabled={busy} onClick={() => decideTrades('approve')}>Approve new trades</button>
+            <button className="btn danger grow" disabled={busy} onClick={() => decideTrades('reject')}>Reject</button>
+          </div>
+        </section>
+      )}
 
       <section className="card">
         <h3>Documents</h3>

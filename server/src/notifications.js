@@ -86,6 +86,18 @@ export const TEMPLATES = {
     url: '/verification',
     channels: { inApp: true, push: true },
   }),
+  trades_approved: ({ names }) => ({
+    title: 'New trades approved',
+    body: `You'll now get ${names.join(', ').toLowerCase()} requests.`,
+    url: '/work',
+    channels: { inApp: true, push: true },
+  }),
+  trades_rejected: ({ names }) => ({
+    title: "We couldn't add some trades",
+    body: `${names.join(', ')} wasn't approved. Upload a certificate that covers it, or contact support.`,
+    url: '/work',
+    channels: { inApp: true, push: true },
+  }),
   dispute_opened: ({ job }) => ({
     title: `A problem was reported on job #${job.id}`,
     body: 'Our team is looking into it and will be in touch.',

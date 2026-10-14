@@ -55,16 +55,55 @@ transaction(db, () => {
     // Scatter pros a few km around the default city centre. Approved ones start online.
     const angle = (i / PROS.length) * 2 * Math.PI;
     const status = pro.status ?? 'approved';
+    const home = { lat: lat + 0.03 * Math.sin(angle), lng: lng + 0.045 * Math.cos(angle) };
+    // Demo pros work any time (so the demo works at night too) within 25 km of where they start.
     db.prepare(`INSERT INTO provider_profiles (user_id, bio, is_online, lat, lng, rating_sum, rating_count,
-        verification_status, verification_submitted_at, verified_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)`)
-      .run(id, pro.bio, status === 'approved' ? 1 : 0, lat + 0.03 * Math.sin(angle), lng + 0.045 * Math.cos(angle),
+        verification_status, verification_submitted_at, verified_at, service_lat, service_lng, service_radius_km)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, ?, 25)`)
+      .run(id, pro.bio, status === 'approved' ? 1 : 0, home.lat, home.lng,
         status === 'approved' ? 4 * 20 + 18 + i : 0, status === 'approved' ? 20 : 0, status,
-        status === 'approved' ? new Date().toISOString() : null);
+        status === 'approved' ? new Date().toISOString() : null, home.lat, home.lng);
     addDemoDocuments(id);
-    for (const c of pro.categories) db.prepare('INSERT INTO provider_categories VALUES (?, ?)').run(id, c);
+    for (const c of pro.categories) {
+      db.prepare('INSERT INTO provider_categories (user_id, category_id, status) VALUES (?, ?, ?)')
+        .run(id, c, status === 'approved' ? 'approved' : 'pending');
+    }
   });
 });
+
+// A few weeks of paid, completed jobs for the demo plumber, so the earnings dashboard has something to show.
+const plumber = exists.get('plumber@demo.com');
+const customer = exists.get('customer@demo.com');
+const hasHistory = db.prepare("SELECT 1 FROM jobs WHERE provider_id = ? AND status = 'completed'").get(plumber.id);
+if (!hasHistory) {
+  const { callout_cents: callout, hourly_cents: hourly } = db.prepare("SELECT * FROM categories WHERE id = 'plumbing'").get();
+  const history = [
+    [1, 1, 0], [2, 2, 18000], [3, 1, 0], [5, 4, 42000], [6, 1, 0], [8, 2, 0], [9, 1, 9500], [12, 2, 0],
+    [13, 1, 0], [15, 4, 0], [17, 2, 26000], [19, 1, 0], [22, 2, 0], [24, 1, 12000], [26, 4, 0], [29, 2, 0], [33, 1, 0],
+  ]; // [days ago, hours, parts cents]
+  transaction(db, () => {
+    for (const [daysAgo, hours, parts] of history) {
+      const estimated = callout + hourly * hours;
+      const fee = Math.round(estimated * config.platformFeeRate);
+      const done = new Date(Date.now() - daysAgo * 86400000 - (2 + (daysAgo % 5)) * 3600000).toISOString().replace('T', ' ').slice(0, 19);
+      const size = { 1: 'small', 2: 'medium', 4: 'large' }[hours];
+      const { lastInsertRowid } = db.prepare(`
+        INSERT INTO jobs (customer_id, provider_id, category_id, description, size, address, lat, lng, status, estimated_cents,
+          materials_cents, final_cents, platform_fee_cents, payout_cents, payment_status, materials_status, fee_rate,
+          created_at, accepted_at, started_at, completed_at)
+        VALUES (?, ?, 'plumbing', 'Demo job', ?, 'Demo address, Johannesburg', ?, ?, 'completed', ?, ?, ?, ?, ?, 'paid', ?, ?, ?, ?, ?, ?)`)
+        .run(customer.id, plumber.id, size, lat, lng, estimated, parts, estimated + parts, fee, estimated - fee + parts,
+          parts ? 'paid' : null, config.platformFeeRate, done, done, done, done);
+      const jobId = Number(lastInsertRowid);
+      const payout = db.prepare(`INSERT INTO payouts (job_id, provider_id, kind, amount_cents, reference, status, paid_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+      // The most recent payout is still on its way, the rest have landed.
+      const status = daysAgo <= 1 ? 'processing' : 'paid';
+      payout.run(jobId, plumber.id, 'labour', estimated - fee, `po_demo_${jobId}_l`, status, status === 'paid' ? done : null, done);
+      if (parts) payout.run(jobId, plumber.id, 'materials', parts, `po_demo_${jobId}_m`, status, status === 'paid' ? done : null, done);
+    }
+  });
+}
 
 console.log(`Seeded demo accounts (password: ${PASSWORD}):`);
 console.log('  admin@demo.com     (admin panel)');

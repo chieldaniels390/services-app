@@ -219,6 +219,14 @@ const ADDED_COLUMNS = [
   ['provider_profiles', 'verified_by', 'INTEGER'],
   ['payments', 'refunded_cents', 'INTEGER NOT NULL DEFAULT 0'],
   ['users', 'sms_enabled', 'INTEGER NOT NULL DEFAULT 1'],
+  // Where and when a pro works. NULLs mean "around my live location, any time".
+  ['provider_profiles', 'service_lat', 'REAL'],
+  ['provider_profiles', 'service_lng', 'REAL'],
+  ['provider_profiles', 'service_radius_km', 'REAL'],
+  ['provider_profiles', 'working_hours', 'TEXT'],
+  // approved | pending. Trades added after verification are pending until an admin approves them.
+  // Existing rows default to approved: they were part of the pro's original verification.
+  ['provider_categories', 'status', "TEXT NOT NULL DEFAULT 'approved'"],
 ];
 
 /**

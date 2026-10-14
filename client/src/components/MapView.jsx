@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import L from 'leaflet';
-import { MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet';
+import { Circle, MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet';
 import { useSession } from '../session.jsx';
 
 const iconCache = new Map();
@@ -53,14 +53,24 @@ function Focus({ point }) {
 /**
  * markers: [{ id, lat, lng, emoji, variant, label }]
  * frame: points the view should keep in shot.
+ * circles: [{ id, lat, lng, radiusKm }] - e.g. a pro's service area.
  */
-export default function MapView({ center, markers = [], frame = [], focus, onPick, className = '' }) {
+export default function MapView({ center, markers = [], circles = [], frame = [], focus, onPick, className = '' }) {
   const framePoints = useMemo(() => frame.filter(Boolean), [frame]);
   const { map: tiles } = useSession().config;
   return (
     <div className={`map ${tiles.dark ? 'dark-tiles' : ''} ${className}`}>
       <MapContainer center={center} zoom={14} maxZoom={tiles.maxZoom} scrollWheelZoom zoomControl={false}>
         <TileLayer url={tiles.tileUrl} subdomains={tiles.subdomains} attribution={tiles.attribution} maxZoom={tiles.maxZoom} />
+        {circles.map((c) => (
+          <Circle
+            key={c.id}
+            center={[c.lat, c.lng]}
+            radius={c.radiusKm * 1000}
+            pathOptions={{ color: '#2dd4bf', weight: 2, fillColor: '#2dd4bf', fillOpacity: 0.1 }}
+            interactive={false}
+          />
+        ))}
         {markers.map((m) => (
           <Marker key={m.id} position={[m.lat, m.lng]} icon={pinIcon(m.emoji, m.variant)}>
             {m.label && <Tooltip direction="top" offset={[0, -18]}>{m.label}</Tooltip>}
@@ -73,4 +83,11 @@ export default function MapView({ center, markers = [], frame = [], focus, onPic
       </MapContainer>
     </div>
   );
+}
+
+/** Points on the edge of a circle, so a map can frame the whole service area. */
+export function circleBounds({ lat, lng, radiusKm }) {
+  const dLat = radiusKm / 111.32;
+  const dLng = radiusKm / (111.32 * Math.cos((lat * Math.PI) / 180));
+  return [{ lat: lat + dLat, lng }, { lat: lat - dLat, lng }, { lat, lng: lng + dLng }, { lat, lng: lng - dLng }];
 }

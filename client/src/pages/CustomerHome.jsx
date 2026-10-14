@@ -29,12 +29,14 @@ export default function CustomerHome() {
   useEffect(() => {
     if (!categoryId) return undefined;
     const t = setTimeout(() => {
-      api('/estimate', { method: 'POST', body: { categoryId, size, ...location } })
+      // Pros are matched on their working hours at the booked time, so a scheduled quote checks that time.
+      const at = timing === 'later' && scheduledFor ? new Date(scheduledFor).toISOString() : undefined;
+      api('/estimate', { method: 'POST', body: { categoryId, size, ...location, scheduledFor: at } })
         .then(setEstimate)
         .catch((e) => setError(e.message));
     }, 250);
     return () => clearTimeout(t);
-  }, [categoryId, size, location]);
+  }, [categoryId, size, location, timing, scheduledFor]);
 
   // Latest reverse lookup wins, so quick successive taps can't leave a stale address behind.
   const lookup = useRef(0);
