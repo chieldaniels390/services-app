@@ -1,5 +1,7 @@
+import { Suspense, lazy } from 'react';
 import { Link, NavLink, Navigate, Route, Routes } from 'react-router-dom';
-import { useSession } from './session.jsx';
+import { api } from './api.js';
+import { useSession, useSocketEvent } from './session.jsx';
 import Landing from './pages/Landing.jsx';
 import AuthPage from './pages/AuthPage.jsx';
 import CustomerHome from './pages/CustomerHome.jsx';
@@ -7,24 +9,37 @@ import ProviderHome from './pages/ProviderHome.jsx';
 import JobPage from './pages/JobPage.jsx';
 import History from './pages/History.jsx';
 import Payouts from './pages/Payouts.jsx';
+import Verification from './pages/Verification.jsx';
+
 
 export const APP_NAME = 'ProNow';
 
+// Only admins need the admin panel, so it loads as a separate chunk.
+const AdminLayout = lazy(() => import('./pages/admin/AdminLayout.jsx'));
+
 function Shell({ children }) {
-  const { user, signOut, config } = useSession();
+  const { user, setUser, signOut, config } = useSession();
+  // An admin decision changes what a pro can do, so refresh their profile wherever they are.
+  useSocketEvent('verification:updated', () => api('/me').then(setUser).catch(() => {}));
   return (
     <div className="shell">
       <header className="topbar">
         <Link to="/" className="brand">
           <span className="logo">🔧</span> {APP_NAME}
           {user?.role === 'provider' && <span className="badge">Pro</span>}
+          {user?.role === 'admin' && <span className="badge admin">Admin</span>}
           {config.payments.testMode && <span className="badge test" title="Paystack test mode: no real money moves">Test</span>}
         </Link>
-        {user && (
+        {user && user.role !== 'admin' && (
           <nav>
             <NavLink to="/" end>Home</NavLink>
             <NavLink to="/history">{user.role === 'provider' ? 'Jobs' : 'My bookings'}</NavLink>
             {user.role === 'provider' && <NavLink to="/payouts">Payouts</NavLink>}
+            <button className="link" onClick={signOut}>Sign out</button>
+          </nav>
+        )}
+        {user?.role === 'admin' && (
+          <nav>
             <button className="link" onClick={signOut}>Sign out</button>
           </nav>
         )}
@@ -43,6 +58,17 @@ export default function App() {
   const { user, ready, config } = useSession();
   if (!ready || !config) return <div className="splash"><span className="logo">🔧</span></div>;
 
+  if (user?.role === 'admin') {
+    return (
+      <Shell>
+        <Routes>
+          <Route path="/admin/*" element={<Suspense fallback={<p className="muted">Loading…</p>}><AdminLayout /></Suspense>} />
+          <Route path="*" element={<Navigate to="/admin" replace />} />
+        </Routes>
+      </Shell>
+    );
+  }
+
   const home = !user ? <Landing /> : user.role === 'provider' ? <ProviderHome /> : <CustomerHome />;
   return (
     <Shell>
@@ -53,6 +79,7 @@ export default function App() {
         <Route path="/jobs/:id" element={<RequireUser><JobPage /></RequireUser>} />
         <Route path="/history" element={<RequireUser><History /></RequireUser>} />
         <Route path="/payouts" element={user?.role === 'provider' ? <Payouts /> : <Navigate to="/" replace />} />
+        <Route path="/verification" element={user?.role === 'provider' ? <Verification /> : <Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Shell>

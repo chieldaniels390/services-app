@@ -6,7 +6,8 @@
     "dev": "node --disable-warning=ExperimentalWarning --watch src/index.js",
     "start": "node --disable-warning=ExperimentalWarning src/index.js",
     "seed": "node --disable-warning=ExperimentalWarning src/seed.js",
-    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js",
+    "create-admin": "node --disable-warning=ExperimentalWarning src/create-admin.js"
   },
   "dependencies": {
     "express": "^5.2.1",

@@ -37,7 +37,8 @@ export function createPaystack({ secretKey, baseUrl = 'https://api.paystack.co',
     verify: (reference) => call('GET', `/transaction/verify/${encodeURIComponent(reference)}`),
     chargeAuthorization: ({ email, amountCents, authorizationCode, reference, metadata }) =>
       call('POST', '/transaction/charge_authorization', { email, amount: amountCents, currency, authorization_code: authorizationCode, reference, metadata }),
-    refund: (reference) => call('POST', '/refund', { transaction: reference }),
+    // Omit amountCents for a full refund.
+    refund: (reference, amountCents) => call('POST', '/refund', { transaction: reference, ...(amountCents && { amount: amountCents }) }),
 
     listBanks: () => call('GET', `/bank?country=${encodeURIComponent('south africa')}&currency=${currency}&perPage=100`),
     // 'basa' is Paystack's recipient type for South African bank accounts.

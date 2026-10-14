@@ -60,6 +60,8 @@ export const PAYOUT_LABELS = {
   processing: 'On its way to your bank',
   paid: 'Paid to your bank',
   failed: 'Failed',
+  on_hold: 'On hold (dispute)',
+  cancelled: 'Cancelled',
 };
 
 /** Paystack's hosted checkout; it sends the customer back to the job page when they're done. */

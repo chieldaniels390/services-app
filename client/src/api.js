@@ -35,3 +35,24 @@ export async function api(path, { method = 'GET', body } = {}) {
   }
   return data;
 }
+
+/** Sends a file as the raw request body (the server checks its real type from its contents). */
+export async function apiUpload(path, file) {
+  const token = getToken();
+  const res = await fetch(`/api${path}`, {
+    method: 'PUT',
+    headers: { 'content-type': file.type || 'application/octet-stream', ...(token && { authorization: `Bearer ${token}` }) },
+    body: file,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error ?? (res.status === 413 ? 'That file is too large (8 MB max)' : `Upload failed (${res.status})`));
+  return data;
+}
+
+/** Downloads a protected file (e.g. a verification document) with the auth header img/src can't send. */
+export async function apiBlob(path) {
+  const token = getToken();
+  const res = await fetch(`/api${path}`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) throw new Error(`Could not load file (${res.status})`);
+  return res.blob();
+}

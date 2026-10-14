@@ -4,7 +4,7 @@ import { CATEGORIES } from './categories.js';
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  role TEXT NOT NULL CHECK (role IN ('customer', 'provider')),
+  role TEXT NOT NULL CHECK (role IN ('customer', 'provider', 'admin')),
   name TEXT NOT NULL,
   email TEXT NOT NULL UNIQUE COLLATE NOCASE,
   phone TEXT,
@@ -114,6 +114,48 @@ CREATE TABLE IF NOT EXISTS payouts (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS payouts_provider ON payouts (provider_id);
+
+-- Refunds issued against a payment (full or partial). created_by is NULL for automatic refunds.
+CREATE TABLE IF NOT EXISTS refunds (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id),
+  payment_id INTEGER NOT NULL REFERENCES payments(id),
+  amount_cents INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  paystack_id TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS refunds_job ON refunds (job_id);
+
+-- Verification documents. Files live on disk under UPLOAD_DIR, never in the public web root.
+CREATE TABLE IF NOT EXISTS provider_documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('id', 'certificate', 'selfie')),
+  file_name TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS provider_documents_user ON provider_documents (user_id, kind);
+
+CREATE TABLE IF NOT EXISTS disputes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id),
+  opened_by INTEGER NOT NULL REFERENCES users(id),
+  reason TEXT NOT NULL,
+  details TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
+  resolution_note TEXT,
+  refund_cents INTEGER NOT NULL DEFAULT 0,
+  payout_action TEXT,
+  resolved_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  resolved_at TEXT
+);
+CREATE INDEX IF NOT EXISTS disputes_job ON disputes (job_id);
 `;
 
 // Columns added after the first release. CREATE TABLE IF NOT EXISTS won't add them to an existing database.
@@ -125,9 +167,49 @@ const ADDED_COLUMNS = [
   ['provider_profiles', 'payout_bank_name', 'TEXT'],
   ['provider_profiles', 'payout_account_last4', 'TEXT'],
   ['provider_profiles', 'payout_account_name', 'TEXT'],
+  // unsubmitted -> pending -> approved | rejected. Only approved pros can go online or take jobs.
+  ['provider_profiles', 'verification_status', "TEXT NOT NULL DEFAULT 'unsubmitted'"],
+  ['provider_profiles', 'verification_note', 'TEXT'],
+  ['provider_profiles', 'verification_submitted_at', 'TEXT'],
+  ['provider_profiles', 'verified_at', 'TEXT'],
+  ['provider_profiles', 'verified_by', 'INTEGER'],
+  ['payments', 'refunded_cents', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 
+/**
+ * Databases created before the admin role existed have a CHECK constraint that rejects it.
+ * SQLite can't alter a CHECK, so rebuild the table (the documented 12-step procedure, condensed).
+ */
+function allowAdminRole(db) {
+  const { sql } = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'").get();
+  if (sql.includes("'admin'")) return;
+  const columns = 'id, role, name, email, phone, password_hash, created_at';
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    transaction(db, () => {
+      db.exec(`
+        CREATE TABLE users_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          role TEXT NOT NULL CHECK (role IN ('customer', 'provider', 'admin')),
+          name TEXT NOT NULL,
+          email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+          phone TEXT,
+          password_hash TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO users_new (${columns}) SELECT ${columns} FROM users;
+        DROP TABLE users;
+        ALTER TABLE users_new RENAME TO users;`);
+      const broken = db.prepare('PRAGMA foreign_key_check').all();
+      if (broken.length) throw new Error(`Foreign key check failed after migrating users: ${JSON.stringify(broken)}`);
+    });
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
 function migrate(db) {
+  allowAdminRole(db);
   for (const [table, column, definition] of ADDED_COLUMNS) {
     const exists = db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
     if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);

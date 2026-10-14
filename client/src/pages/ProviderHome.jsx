@@ -77,6 +77,33 @@ export default function ProviderHome() {
   ];
   const myServices = categories.filter((c) => profile.categories.includes(c.id));
 
+  if (profile.verificationStatus !== 'approved') {
+    const pending = profile.verificationStatus === 'pending';
+    return (
+      <div className="provider-home">
+        <section className="card verify-cta">
+          <span className="icon">{pending ? '⏳' : '🪪'}</span>
+          <div className="grow">
+            <h2>{pending ? 'Verification in progress' : profile.verificationStatus === 'rejected' ? 'Action needed on your verification' : 'Verify your account'}</h2>
+            <p className="muted">
+              {pending
+                ? "We're checking your documents. You'll be able to go online and receive jobs once you're approved."
+                : 'Upload your ID, trade certificate or licence, and a selfie. You can receive jobs once we approve them.'}
+            </p>
+          </div>
+          <Link to="/verification" className="btn primary">{pending ? 'View' : 'Start'}</Link>
+        </section>
+        {!profile.payoutAccount && (
+          <Link to="/payouts" className="banner warn">
+            <span className="icon">🏦</span>
+            <span>While you wait: <strong>add your bank account</strong> so we can pay you.</span>
+            <span className="arrow">›</span>
+          </Link>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="provider-home">
       <section className={`card online-card ${profile.online ? 'online' : ''}`}>

@@ -1,6 +1,8 @@
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   dbFile: process.env.DB_FILE ?? 'services.db',
+  // Verification documents (IDs, selfies). Keep this outside any public folder and back it up securely.
+  uploadDir: process.env.UPLOAD_DIR ?? 'uploads',
   tokenSecret: process.env.TOKEN_SECRET ?? 'dev-secret-change-me',
   tokenTtlSeconds: 60 * 60 * 24 * 30,
   currency: process.env.CURRENCY ?? 'ZAR',

@@ -20,10 +20,13 @@ Customers get an upfront price and pay by card through **Paystack** when they bo
 - In-app chat and click-to-call with the assigned pro
 - Pay by card with Paystack at booking. The money is held until the job is done, and cancelling before work starts refunds it in full
 - Approve and pay for any parts the pro added (charged to the saved card, or via a new checkout)
+- Report a problem (dispute) once the pro has arrived, up to 14 days after the job
+- See a **Verified** badge on their pro
 - Rate and review afterwards; booking history
 
 **Pros**
-- Sign up with the services you offer, go online/offline
+- Sign up with the services you offer, then **get verified**: upload an ID, a trade certificate or licence, and a selfie. Only approved pros can go online, receive requests or accept jobs
+- Go online/offline
 - New requests nearby **pop up instantly** with distance, ETA and your payout (exact address hidden until you accept)
 - First pro to accept wins (atomic; others see the job disappear)
 - Step through the job, add materials cost on completion, open navigation in Google Maps
@@ -32,6 +35,13 @@ Customers get an upfront price and pay by card through **Paystack** when they bo
 - Add a South African bank account and get paid automatically when a job is marked complete (job price minus the platform fee, plus parts in full)
 - Payouts page with transfer status and a retry button for failed transfers
 - Earnings for today / 7 days / all time, rating, job history
+
+**Admin panel** (`/admin`)
+- **Overview:** what needs attention (pros to verify, open disputes, failed or held payouts) and key numbers
+- **Pros:** a verification queue with each pro's ID, certificate and selfie side by side. Approve, reject with a reason the pro sees, or suspend an approved pro
+- **Jobs:** search by job number, name, email or address and filter by status. Each job page shows the people, the full money trail (payments, refunds, payouts), disputes and the chat log
+- **Disputes:** resolve with an optional refund, then release the pro's held payout or cancel it. Both sides see the outcome note
+- **Refunds:** issue partial or full refunds on any paid job, with a reason. They go through Paystack and are recorded with who issued them
 
 **Platform**
 - Platform fee (default 15%, set with `PLATFORM_FEE_RATE`) on the upfront price; parts go 100% to the pro. Each job keeps the fee rate it was booked at
@@ -56,6 +66,44 @@ Typical 2025/26 South African rates, set in `server/src/categories.js` (amounts 
 | Gardening | R150 | R180 | R330 |
 
 Standard jobs are quoted at 2 hours and big jobs at 4. Rates differ between cities and suburbs, so check them against local competitors before launch.
+
+## Verification, disputes and admin
+
+| Pro uploads documents | Admin reviews a pro | Admin resolves a dispute |
+| --- | --- | --- |
+| ![](docs/screenshots/pro-verification.png) | ![](docs/screenshots/admin-verify.png) | ![](docs/screenshots/admin-job.png) |
+
+**Creating your admin account.** There's no sign-up for admins. On the server, run:
+
+```bash
+npm run create-admin -- you@example.com "Your Name"
+```
+
+It prints a generated password once, or set `ADMIN_PASSWORD` to choose one (12+ characters). Then sign in normally and you land on `/admin`. The demo seed also creates `admin@demo.com`, for local use only. The seed script refuses to run when `NODE_ENV=production`.
+
+**Verification.** A pro moves from *not submitted* → *pending* → *approved* or *rejected*.
+- Uploads are checked by their actual contents, not their file name: JPG, PNG, WebP or PDF, and photos only for the selfie. Each file is capped at 8 MB.
+- Files are stored under `UPLOAD_DIR` with random names, outside the public web folder. They're served only to the pro who uploaded them and to admins.
+- A replaced document deletes the old file.
+- Documents are locked while under review and once approved.
+- Rejecting an approved pro suspends them: they go offline straight away and stop receiving jobs.
+
+**Disputes.**
+- The customer or the assigned pro can raise one once the pro has arrived, up to 14 days after completion. Admins can open one on any job.
+- While a dispute is open, any payout not yet sent is held. A payout that was already transferred can't be pulled back. A refund in that case comes out of the platform's balance.
+- Resolving a dispute applies the refund first. If Paystack refuses, the dispute stays open and nothing else changes. Then the held payouts are released or cancelled.
+
+**Refunds.** Every refund goes through one code path, whether it's a customer cancellation, an automatic duplicate-payment refund, an admin refund or a dispute refund. The amount is reserved before calling Paystack, so two admins clicking at once can't refund more than was paid.
+
+**Sign-in protection.** After 10 failed attempts for the same email from the same IP address, sign-in is blocked for 15 minutes.
+
+### Before you go live with real IDs
+
+ID documents and selfies are personal information under **POPIA**.
+- Put `UPLOAD_DIR` on encrypted storage that's backed up and not publicly reachable. For more than one server, move it to private object storage such as S3, with short-lived signed links.
+- Decide how long you keep documents after approval or account closure, and say so in your privacy policy.
+- Give admin accounts strong, unique passwords and keep the list of admins short.
+- Consider an ID-verification provider for automatic ID and face matching. The review queue stays the same; the provider's result becomes another input for the reviewer.
 
 ## Payments (Paystack)
 
@@ -109,11 +157,16 @@ server/src
   pricing.js     quotes, surge, fee split
   paystack.js    Paystack API client + webhook signature check
   payments.js    booking payments, refunds, parts, payouts
+  verification.js  pro documents + approval
+  disputes.js    raising and resolving disputes
+  admin.js       admin panel queries
+  create-admin.js  CLI to create an admin account
   geocoder.js    address search / reverse lookup (Nominatim), throttled + cached
   db.js          schema
   seed.js        demo accounts
 client/src
-  pages/         Landing, Auth, CustomerHome, ProviderHome, JobPage, History, Payouts
+  pages/         Landing, Auth, CustomerHome, ProviderHome, JobPage, History, Payouts, Verification
+  pages/admin/   Overview, Pros, Pro, Jobs, Job, Disputes (loaded only for admins)
   components/    MapView, AddressSearch, Chat, StatusTimeline, Stars
 ```
 
@@ -131,12 +184,14 @@ Demo accounts:
 
 | Email | Role |
 | --- | --- |
+| admin@demo.com | Admin panel |
 | customer@demo.com | Customer |
 | plumber@demo.com | Plumbing, Heating & AC |
 | electrician@demo.com | Electrical, Appliances |
 | cleaner@demo.com | Cleaning |
 | locksmith@demo.com | Locksmith, Handyman |
 | handyman@demo.com | Handyman, Painting, Gardening |
+| newpro@demo.com | Plumbing, Handyman, **waiting for verification** (try approving them as admin) |
 
 **Try the full flow** (needs a Paystack test key, see below): open the app in two browser windows (one normal, one private). Sign in as `customer@demo.com` in one and `plumber@demo.com` in the other. As the pro, add a bank account on the Payouts page. As the customer, request a plumber and pay with a test card. Then accept the job as the pro, then tap *Start driving* → *Demo drive* to watch the van move on the customer's map.
 
@@ -153,6 +208,7 @@ npm start         # serves API + app on PORT (default 4000)
 | --- | --- | --- |
 | `PORT` | `4000` | |
 | `DB_FILE` | `services.db` | SQLite file |
+| `UPLOAD_DIR` | `uploads` | Where verification documents are stored. Keep private and backed up |
 | `TOKEN_SECRET` | dev value | **Set this in production** |
 | `CURRENCY` | `ZAR` | ISO code used for display |
 | `LOCALE` | `en-ZA` | Number formatting locale |
@@ -179,7 +235,8 @@ npm test
 ## Roadmap
 
 - Cancellation fees once a pro is on the way; automatically expire unpaid bookings
-- Admin console for refunds, disputes and failed payouts
+- Automatic ID and face matching through a verification provider
+- Admin actions for failed payouts (retry or mark as paid by hand), and an audit log of admin actions
 - Pro verification (ID, licences, insurance) and an admin console
 - Photo uploads on requests, push notifications / SMS
 - Routing-based ETAs (road distance instead of straight line)

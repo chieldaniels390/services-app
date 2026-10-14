@@ -2,6 +2,7 @@ import { config } from './config.js';
 import { transaction } from './db.js';
 import { HttpError, badRequest, conflict, forbidden, notFound } from './errors.js';
 import { distanceKm, etaMinutes } from './geo.js';
+import { DISPUTE_REASONS, createDisputeService } from './disputes.js';
 import { createPaymentService } from './payments.js';
 import { JOB_SIZES, quote, settle, surgeMultiplier } from './pricing.js';
 
@@ -22,6 +23,7 @@ const JOB_SELECT = `
     pu.name AS provider_name, pu.phone AS provider_phone,
     pp.lat AS provider_lat, pp.lng AS provider_lng,
     pp.rating_sum AS provider_rating_sum, pp.rating_count AS provider_rating_count,
+    pp.verification_status AS provider_verification,
     r.rating, r.comment AS rating_comment
   FROM jobs j
   JOIN categories c ON c.id = j.category_id
@@ -32,7 +34,7 @@ const JOB_SELECT = `
 
 export const ratingOf = (sum, count) => (count ? Math.round((sum / count) * 10) / 10 : null);
 
-export function createJobService({ db, notify, paystack }) {
+export function createJobService({ db, notify, paystack, notifyAdmins = () => {} }) {
   const payments = createPaymentService({
     db,
     paystack,
@@ -45,6 +47,9 @@ export function createJobService({ db, notify, paystack }) {
     onJobChanged: (id) => notifyParties(getJobRow(id)),
     onPayoutChanged: (providerId) => notify(providerId, 'payouts:updated', {}),
   });
+  const disputes = createDisputeService({ db, payments, onJobChanged: (id) => notifyParties(getJobRow(id)), notifyAdmins });
+  const isApproved = (userId) =>
+    db.prepare('SELECT verification_status FROM provider_profiles WHERE user_id = ?').get(userId)?.verification_status === 'approved';
   const feeRateOf = (row) => row.fee_rate ?? config.platformFeeRate;
 
   const getCategory = (id) => db.prepare('SELECT * FROM categories WHERE id = ?').get(id);
@@ -56,8 +61,20 @@ export function createJobService({ db, notify, paystack }) {
     return row;
   }
 
+  function latestDispute(jobId) {
+    const d = db.prepare(`
+      SELECT d.*, u.role AS opener_role FROM disputes d JOIN users u ON u.id = d.opened_by
+      WHERE d.job_id = ? ORDER BY d.id DESC`).get(jobId);
+    if (!d) return null;
+    return {
+      id: d.id, status: d.status, reason: d.reason, reasonLabel: DISPUTE_REASONS[d.reason], details: d.details,
+      openedBy: d.opener_role, resolutionNote: d.resolution_note, refundCents: d.refund_cents,
+      payoutAction: d.payout_action, createdAt: d.created_at, resolvedAt: d.resolved_at,
+    };
+  }
+
   function toDto(row, viewer) {
-    const involved = viewer.id === row.customer_id || viewer.id === row.provider_id;
+    const involved = viewer.id === row.customer_id || viewer.id === row.provider_id || viewer.role === 'admin';
     const isProvider = viewer.role === 'provider';
     const trackProvider = row.provider_id && ACTIVE_STATUSES.includes(row.status) && row.provider_lat != null;
     const dto = {
@@ -89,6 +106,7 @@ export function createJobService({ db, notify, paystack }) {
             rating: ratingOf(row.provider_rating_sum, row.provider_rating_count),
             ratingCount: row.provider_rating_count,
             location: trackProvider ? { lat: row.provider_lat, lng: row.provider_lng } : null,
+            verified: row.provider_verification === 'approved',
           }
         : null,
       review: row.rating ? { rating: row.rating, comment: row.rating_comment } : null,
@@ -103,6 +121,8 @@ export function createJobService({ db, notify, paystack }) {
       // paymentStatus: unpaid | paid | refund_pending | refunded. materialsStatus: null | unpaid | paid.
       dto.paymentStatus = row.payment_status;
       dto.materialsStatus = row.materials_status;
+      dto.refundedCents = db.prepare('SELECT COALESCE(SUM(amount_cents), 0) AS c FROM refunds WHERE job_id = ?').get(row.id).c;
+      dto.dispute = latestDispute(row.id);
     }
     if (isProvider) {
       dto.payoutCents = row.payout_cents ?? settle(row.estimated_cents, 0, feeRateOf(row)).payoutCents;
@@ -123,6 +143,7 @@ export function createJobService({ db, notify, paystack }) {
       JOIN users u ON u.id = p.user_id
       JOIN provider_categories pc ON pc.user_id = p.user_id AND pc.category_id = ?
       WHERE p.is_online = 1 AND p.lat IS NOT NULL
+        AND p.verification_status = 'approved'
         AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.provider_id = p.user_id AND j.status IN (${ACTIVE_SQL}))`)
       .all(categoryId);
     return rows
@@ -234,8 +255,9 @@ export function createJobService({ db, notify, paystack }) {
   function getForUser(user, id) {
     const row = requireJob(id);
     const involved = user.id === row.customer_id || user.id === row.provider_id;
-    const canPreview = user.role === 'provider' && row.status === 'requested' && offersCategory(user.id, row.category_id);
-    if (!involved && !canPreview) throw forbidden();
+    const canPreview = user.role === 'provider' && row.status === 'requested' && offersCategory(user.id, row.category_id)
+      && isApproved(user.id);
+    if (!involved && !canPreview && user.role !== 'admin') throw forbidden();
     return toDto(row, user);
   }
 
@@ -244,7 +266,7 @@ export function createJobService({ db, notify, paystack }) {
 
   function openRequestsFor(provider) {
     const profile = db.prepare('SELECT * FROM provider_profiles WHERE user_id = ?').get(provider.id);
-    if (!profile?.is_online || profile.lat == null) return [];
+    if (!profile?.is_online || profile.lat == null || profile.verification_status !== 'approved') return [];
     return db.prepare(`${JOB_SELECT}
       WHERE j.status = 'requested' AND j.customer_id != ?
         AND j.category_id IN (SELECT category_id FROM provider_categories WHERE user_id = ?)
@@ -264,6 +286,7 @@ export function createJobService({ db, notify, paystack }) {
 
   function accept(provider, id) {
     const row = requireJob(id);
+    if (!isApproved(provider.id)) throw forbidden('Your account needs to be verified before you can take jobs');
     if (!offersCategory(provider.id, row.category_id)) throw forbidden('You do not offer this service');
     if (row.customer_id === provider.id) throw forbidden();
     const busy = db.prepare(`SELECT 1 FROM jobs WHERE provider_id = ? AND status IN (${ACTIVE_SQL})`).get(provider.id);
@@ -355,7 +378,7 @@ export function createJobService({ db, notify, paystack }) {
 
   function messages(user, id) {
     const row = requireJob(id);
-    if (user.id !== row.customer_id && user.id !== row.provider_id) throw forbidden();
+    if (user.id !== row.customer_id && user.id !== row.provider_id && user.role !== 'admin') throw forbidden();
     return db.prepare(`
       SELECT m.id, m.body, m.created_at AS createdAt, m.sender_id AS senderId, u.name AS senderName
       FROM messages m JOIN users u ON u.id = m.sender_id WHERE m.job_id = ? ORDER BY m.id`).all(id);
@@ -394,7 +417,7 @@ export function createJobService({ db, notify, paystack }) {
       week: sum("AND completed_at >= datetime('now', '-7 days')"),
       allTime: sum(''),
       paidOutCents: payoutTotal(['paid']),
-      pendingPayoutCents: payoutTotal(['awaiting_details', 'sending', 'processing', 'failed']),
+      pendingPayoutCents: payoutTotal(['awaiting_details', 'sending', 'processing', 'failed', 'on_hold']),
       currency: config.currency,
     };
   }
@@ -402,6 +425,7 @@ export function createJobService({ db, notify, paystack }) {
   return {
     estimate, create, listForUser, getForUser, openRequestsFor, accept, advance, cancel, rate,
     messages, sendMessage, relayLocation, earnings, payBooking, confirmPayment, payMaterials, payments,
+    disputes, toDto, getJobRow, JOB_SELECT,
   };
 }
 

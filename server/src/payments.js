@@ -83,36 +83,89 @@ export function createPaymentService({ db, paystack, appUrl, onBookingPaid, onJo
     onJobChanged(job.id);
   }
 
+  // --- Refunds -----------------------------------------------------------
+
+  /**
+   * Refunds part or all of one payment through Paystack and records it. The amount is reserved before
+   * calling Paystack (so two refunds at once can't exceed what was paid) and released again if Paystack refuses.
+   */
+  async function refundPayment(payment, amountCents, reason, byUserId = null) {
+    const { changes } = db.prepare(`
+      UPDATE payments SET refunded_cents = refunded_cents + ?
+      WHERE id = ? AND status IN ('paid', 'refund_pending') AND refunded_cents + ? <= amount_cents`)
+      .run(amountCents, payment.id, amountCents);
+    if (!changes) throw conflict('That is more than is left to refund on this payment');
+    const full = payment.refunded_cents + amountCents === payment.amount_cents;
+    let data;
+    try {
+      data = await paystack.refund(payment.reference, full && payment.refunded_cents === 0 ? undefined : amountCents);
+    } catch (err) {
+      db.prepare('UPDATE payments SET refunded_cents = refunded_cents - ? WHERE id = ?').run(amountCents, payment.id);
+      throw new HttpError(502, `Paystack couldn't start the refund (${err.message}). Please try again.`);
+    }
+    db.prepare(`
+      INSERT INTO refunds (job_id, payment_id, amount_cents, reason, paystack_id, created_by) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(payment.job_id, payment.id, amountCents, String(reason).slice(0, 500), data?.id != null ? String(data.id) : null, byUserId);
+    if (full) {
+      db.prepare("UPDATE payments SET status = 'refund_pending' WHERE id = ?").run(payment.id);
+      if (payment.kind === 'booking') {
+        db.prepare("UPDATE jobs SET payment_status = 'refund_pending' WHERE id = ? AND payment_status = 'paid'").run(payment.job_id);
+      }
+    }
+  }
+
   async function refundStray(payment) {
     try {
-      await paystack.refund(payment.reference);
-      db.prepare("UPDATE payments SET status = 'refund_pending' WHERE id = ?").run(payment.id);
+      await refundPayment(getPayment(payment.reference), payment.amount_cents, 'Automatic refund: duplicate or late payment');
     } catch (err) {
       console.error(`Could not refund duplicate payment ${payment.reference} - refund it from the Paystack dashboard`, err);
       db.prepare("UPDATE payments SET status = 'refund_failed' WHERE id = ?").run(payment.id);
     }
   }
 
-  /** Full refund of the booking payment when a paid job is cancelled. Throws (and changes nothing) if Paystack refuses. */
+  /** Full refund of what's left of the booking payment when a paid job is cancelled. Throws (and changes nothing) if Paystack refuses. */
   async function refundBooking(jobId) {
     const payment = db.prepare("SELECT * FROM payments WHERE job_id = ? AND kind = 'booking' AND status = 'paid'").get(jobId);
-    const { changes } = db.prepare("UPDATE jobs SET payment_status = 'refund_pending' WHERE id = ? AND payment_status = 'paid'").run(jobId);
-    if (!changes || !payment) throw conflict('This booking is already being refunded');
-    try {
-      await paystack.refund(payment.reference);
-    } catch (err) {
-      db.prepare("UPDATE jobs SET payment_status = 'paid' WHERE id = ?").run(jobId);
-      throw new HttpError(502, `We couldn't start your refund (${err.message}). Please try again.`);
-    }
-    db.prepare("UPDATE payments SET status = 'refund_pending' WHERE id = ?").run(payment.id);
+    if (!payment) throw conflict('This booking is already being refunded');
+    await refundPayment(payment, payment.amount_cents - payment.refunded_cents, 'Booking cancelled by the customer');
   }
 
-  function refundProcessed(reference) {
-    const payment = getPayment(reference);
+  /**
+   * Refunds an amount across a job's paid payments, booking first, then parts.
+   * Used by admins directly and when resolving disputes.
+   */
+  async function refundJob(jobId, amountCents, reason, byUserId) {
+    if (!Number.isInteger(amountCents) || amountCents <= 0) throw badRequest('Enter an amount to refund');
+    const paid = db.prepare(`
+      SELECT * FROM payments WHERE job_id = ? AND status IN ('paid', 'refund_pending') AND refunded_cents < amount_cents
+      ORDER BY CASE kind WHEN 'booking' THEN 0 ELSE 1 END, id`).all(jobId);
+    const refundable = paid.reduce((sum, p) => sum + p.amount_cents - p.refunded_cents, 0);
+    if (amountCents > refundable) throw badRequest(`You can refund at most ${refundable / 100} on this job`);
+    let left = amountCents;
+    for (const payment of paid) {
+      if (!left) break;
+      const part = Math.min(left, payment.amount_cents - payment.refunded_cents);
+      await refundPayment(payment, part, reason, byUserId);
+      left -= part;
+    }
+    onJobChanged(jobId);
+  }
+
+  /** refund.processed webhook. Matched by Paystack's refund id, else by the transaction it belongs to. */
+  function refundProcessed(data) {
+    const reference = data?.transaction_reference ?? data?.transaction?.reference;
+    const payment = reference && getPayment(reference);
     if (!payment) return;
-    db.prepare("UPDATE payments SET status = 'refunded' WHERE id = ?").run(payment.id);
-    if (payment.kind === 'booking') {
-      db.prepare("UPDATE jobs SET payment_status = 'refunded' WHERE id = ? AND payment_status = 'refund_pending'").run(payment.job_id);
+    const refund = (data.id != null && db.prepare("SELECT * FROM refunds WHERE paystack_id = ? AND status = 'pending'").get(String(data.id)))
+      || db.prepare("SELECT * FROM refunds WHERE payment_id = ? AND status = 'pending' ORDER BY id").get(payment.id);
+    if (refund) db.prepare("UPDATE refunds SET status = 'processed' WHERE id = ?").run(refund.id);
+
+    const outstanding = db.prepare("SELECT COUNT(*) AS n FROM refunds WHERE payment_id = ? AND status = 'pending'").get(payment.id).n;
+    if (payment.refunded_cents === payment.amount_cents && !outstanding) {
+      db.prepare("UPDATE payments SET status = 'refunded' WHERE id = ?").run(payment.id);
+      if (payment.kind === 'booking') {
+        db.prepare("UPDATE jobs SET payment_status = 'refunded' WHERE id = ? AND payment_status = 'refund_pending'").run(payment.job_id);
+      }
     }
     onJobChanged(payment.job_id);
   }
@@ -145,12 +198,34 @@ export function createPaymentService({ db, paystack, appUrl, onBookingPaid, onJo
 
   // --- Payouts ---------------------------------------------------------
 
+  const hasOpenDispute = (jobId) => !!db.prepare("SELECT 1 FROM disputes WHERE job_id = ? AND status = 'open'").get(jobId);
+
   async function createPayout(job, kind, amountCents) {
     if (amountCents <= 0) return;
+    // While a dispute is open the money stays with the platform until an admin resolves it.
+    const held = hasOpenDispute(job.id);
     const { lastInsertRowid } = db.prepare(`
-      INSERT INTO payouts (job_id, provider_id, kind, amount_cents, reference) VALUES (?, ?, ?, ?, ?)`)
-      .run(job.id, job.provider_id, kind, amountCents, newReference('po', job.id));
+      INSERT INTO payouts (job_id, provider_id, kind, amount_cents, reference, status) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(job.id, job.provider_id, kind, amountCents, newReference('po', job.id), held ? 'on_hold' : 'awaiting_details');
+    if (held) return onPayoutChanged(job.provider_id);
     await sendPayout(Number(lastInsertRowid));
+  }
+
+  /** Holds unsent payouts for a job (when a dispute opens). Payouts already sent can't be pulled back. */
+  function holdPayouts(jobId) {
+    db.prepare("UPDATE payouts SET status = 'on_hold', updated_at = datetime('now') WHERE job_id = ? AND status IN ('awaiting_details', 'failed')").run(jobId);
+  }
+
+  /** Dispute outcome: 'release' sends held payouts on to the pro, 'cancel' keeps the money with the platform. */
+  async function settleHeldPayouts(jobId, action) {
+    const held = db.prepare("SELECT id, provider_id FROM payouts WHERE job_id = ? AND status = 'on_hold'").all(jobId);
+    if (action === 'cancel') {
+      db.prepare("UPDATE payouts SET status = 'cancelled', updated_at = datetime('now') WHERE job_id = ? AND status = 'on_hold'").run(jobId);
+    } else {
+      db.prepare("UPDATE payouts SET status = 'awaiting_details', updated_at = datetime('now') WHERE job_id = ? AND status = 'on_hold'").run(jobId);
+      for (const { id } of held) await sendPayout(id);
+    }
+    if (held.length) onPayoutChanged(held[0].provider_id);
   }
 
   /** Never throws: a payout that can't go out yet is recorded and retried later. */
@@ -253,8 +328,8 @@ export function createPaymentService({ db, paystack, appUrl, onBookingPaid, onJo
     configured: paystack.configured,
     testMode: paystack.testMode,
     isValidSignature: paystack.isValidSignature,
-    startBooking, checkout, confirm, refundBooking, refundProcessed, payMaterials,
-    createPayout, retryPayouts, transferEvent, payoutsFor, banks, setPayoutAccount,
+    startBooking, checkout, confirm, refundBooking, refundJob, refundProcessed, payMaterials,
+    createPayout, holdPayouts, settleHeldPayouts, retryPayouts, transferEvent, payoutsFor, banks, setPayoutAccount,
     getPayment,
   };
 }

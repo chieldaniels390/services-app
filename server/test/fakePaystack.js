@@ -7,7 +7,8 @@ import { createServer } from 'node:http';
 export async function startFakePaystack({ secretKey }) {
   const state = {
     transactions: new Map(),
-    refunds: [],
+    refunds: [], // transaction references refunded (any amount)
+    refundLog: [], // { transaction, amount }
     transfers: [],
     recipients: [],
     transferStatus: 'pending',
@@ -55,9 +56,14 @@ export async function startFakePaystack({ secretKey }) {
       return ok({ status: state.savedCardStatus, reference: body.reference, amount: body.amount, currency: body.currency });
     }
     if (req.method === 'POST' && url.pathname === '/refund') {
-      if (state.refunds.includes(body.transaction)) return fail(400, 'Transaction has been fully reversed');
-      state.refunds.push(body.transaction);
-      return ok({ status: 'pending', transaction: { reference: body.transaction } });
+      const tx = state.transactions.get(body.transaction);
+      if (!tx || tx.status !== 'success') return fail(400, 'Transaction not found or not successful');
+      const already = state.refundLog.filter((r) => r.transaction === body.transaction).reduce((s, r) => s + r.amount, 0);
+      const amount = body.amount ?? tx.amount - already;
+      if (amount <= 0 || already + amount > tx.amount) return fail(400, 'Refund amount cannot be more than the unrefunded transaction amount');
+      state.refundLog.push({ transaction: body.transaction, amount });
+      if (!state.refunds.includes(body.transaction)) state.refunds.push(body.transaction);
+      return ok({ id: ++seq, status: 'pending', amount, transaction: { reference: body.transaction } });
     }
     if (req.method === 'GET' && url.pathname === '/bank') {
       return ok([

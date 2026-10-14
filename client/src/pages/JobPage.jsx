@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../api.js';
 import Chat from '../components/Chat.jsx';
+import ReportProblem from '../components/ReportProblem.jsx';
 import MapView from '../components/MapView.jsx';
 import StatusTimeline from '../components/StatusTimeline.jsx';
 import { StarInput, Stars } from '../components/Stars.jsx';
@@ -126,7 +127,11 @@ export default function JobPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load]);
 
-  useSocketEvent('job:updated', (j) => j.id === jobId && setJob(j));
+  useSocketEvent('job:updated', (j) => {
+    if (j.id !== jobId) return;
+    setJob(j);
+    setPaymentNotice((n) => (n.startsWith('Checking') ? n : ''));
+  });
   useSocketEvent('job:taken', ({ id }) => id === jobId && isPro && job?.status === 'requested' && load());
   // Confirmation messages fade after a few seconds; "checking" stays until the answer arrives.
   useEffect(() => {
@@ -222,6 +227,7 @@ export default function JobPage() {
             <div className="avatar">{job.provider.name[0]}</div>
             <div className="grow">
               <strong>{job.provider.name}</strong>
+              {job.provider.verified && <span className="verified" title="ID and trade documents checked by ProNow">✓ Verified</span>}
               <div><Stars value={job.provider.rating} count={job.provider.ratingCount} /></div>
             </div>
             {job.provider.phone && ASSIGNED.includes(job.status) && <a className="btn" href={`tel:${job.provider.phone}`}>📞 Call</a>}
@@ -253,7 +259,7 @@ export default function JobPage() {
             <dd>{money(job.estimatedCents)}</dd>
             {job.status === 'completed' && (
               <>
-                <dt>Materials</dt><dd>{money(job.materialsCents)}</dd>
+                {job.materialsCents > 0 && <><dt>Materials</dt><dd>{money(job.materialsCents)}</dd></>}
                 <dt><strong>Total</strong></dt><dd><strong>{money(job.finalCents)}</strong></dd>
               </>
             )}
@@ -261,6 +267,12 @@ export default function JobPage() {
               <>
                 <dt>Upfront payment</dt>
                 <dd className={job.paymentStatus === 'paid' ? 'earn' : ''}>{CUSTOMER_PAYMENT[job.paymentStatus]}</dd>
+              </>
+            )}
+            {!isPro && job.refundedCents > 0 && (
+              <>
+                <dt>Refunded</dt>
+                <dd>{money(job.refundedCents)}</dd>
               </>
             )}
             {!isPro && job.materialsStatus && (
@@ -371,6 +383,8 @@ export default function JobPage() {
             {job.review.comment && <p className="muted">“{job.review.comment}”</p>}
           </section>
         )}
+
+        {(mine || (!isPro && job.provider)) && <ReportProblem job={job} onChange={setJob} />}
 
         {job.provider && (job.status !== 'requested') && (mine || !isPro) && (
           <Chat jobId={job.id} readOnly={!ASSIGNED.includes(job.status)} />

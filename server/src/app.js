@@ -11,20 +11,31 @@ import { HttpError, badRequest, conflict, forbidden } from './errors.js';
 import { createGeocoder } from './geocoder.js';
 import { isValidPoint } from './geo.js';
 import { createJobService, ratingOf } from './jobs.js';
+import { createAdminService } from './admin.js';
+import { DISPUTE_REASONS } from './disputes.js';
 import { createPaystack } from './paystack.js';
+import { DOCUMENT_KINDS, MAX_DOCUMENT_BYTES, createVerificationService } from './verification.js';
 import { JOB_SIZES } from './pricing.js';
 
 const CLIENT_DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../client/dist');
 
-export function createApp({ db, geocoder = createGeocoder(config.geocoder), paystack = createPaystack(config.paystack) }) {
+export function createApp({
+  db,
+  geocoder = createGeocoder(config.geocoder),
+  paystack = createPaystack(config.paystack),
+  uploadDir = config.uploadDir,
+}) {
   const app = express();
   const server = createServer(app);
   const io = new Server(server, { cors: { origin: true } });
 
   const notify = (userId, event, payload) => io.to(`user:${userId}`).emit(event, payload);
   notify.providers = (event, payload) => io.to('providers').emit(event, payload);
-  const jobs = createJobService({ db, notify, paystack });
-  const { payments } = jobs;
+  const notifyAdmins = (event, payload) => io.to('admins').emit(event, payload);
+  const jobs = createJobService({ db, notify, paystack, notifyAdmins });
+  const { payments, disputes } = jobs;
+  const verification = createVerificationService({ db, uploadDir, notify, notifyAdmins });
+  const admin = createAdminService({ db, jobs, verification });
 
   const findUser = (id) => db.prepare('SELECT id, role, name, email, phone FROM users WHERE id = ?').get(id);
 
@@ -41,6 +52,7 @@ export function createApp({ db, geocoder = createGeocoder(config.geocoder), pays
         rating: ratingOf(p.rating_sum, p.rating_count),
         ratingCount: p.rating_count,
         categories,
+        verificationStatus: p.verification_status,
         payoutAccount: p.payout_recipient_code
           ? { bankName: p.payout_bank_name, last4: p.payout_account_last4, accountName: p.payout_account_name }
           : null,
@@ -85,7 +97,7 @@ export function createApp({ db, geocoder = createGeocoder(config.geocoder), pays
     try {
       if (event.event === 'charge.success') await payments.confirm(data.reference);
       else if (event.event?.startsWith('transfer.')) payments.transferEvent(event.event, data);
-      else if (event.event === 'refund.processed') payments.refundProcessed(data.transaction_reference ?? data.transaction?.reference);
+      else if (event.event === 'refund.processed') payments.refundProcessed(data);
       res.sendStatus(200);
     } catch (err) {
       // A non-200 makes Paystack retry later, which is what we want for transient failures.
@@ -107,6 +119,8 @@ export function createApp({ db, geocoder = createGeocoder(config.geocoder), pays
     platformFeeRate: config.platformFeeRate,
     payments: { enabled: payments.configured, testMode: payments.testMode },
     jobSizes: JOB_SIZES,
+    documentKinds: Object.fromEntries(Object.entries(DOCUMENT_KINDS).map(([k, v]) => [k, v.label])),
+    disputeReasons: DISPUTE_REASONS,
   }));
 
   api.get('/categories', (_req, res) => {
@@ -147,10 +161,22 @@ export function createApp({ db, geocoder = createGeocoder(config.geocoder), pays
     res.status(201).json({ token: createToken(user), user: profileOf(user) });
   });
 
+  // Slows down password guessing, which matters most for admin accounts.
+  const failedLogins = new Map();
+  const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+  const MAX_FAILED_LOGINS = 10;
+
   api.post('/auth/login', (req, res) => {
     const { email, password } = req.body ?? {};
+    const key = `${String(email ?? '').toLowerCase()}|${req.ip}`;
+    const attempts = (failedLogins.get(key) ?? []).filter((t) => t > Date.now() - LOGIN_WINDOW_MS);
+    if (attempts.length >= MAX_FAILED_LOGINS) throw new HttpError(429, 'Too many attempts - try again in 15 minutes');
     const row = db.prepare('SELECT * FROM users WHERE email = ?').get(email ?? '');
-    if (!row || !verifyPassword(String(password ?? ''), row.password_hash)) throw new HttpError(401, 'Wrong email or password');
+    if (!row || !verifyPassword(String(password ?? ''), row.password_hash)) {
+      failedLogins.set(key, [...attempts, Date.now()]);
+      throw new HttpError(401, 'Wrong email or password');
+    }
+    failedLogins.delete(key);
     const user = findUser(row.id);
     res.json({ token: createToken(user), user: profileOf(user) });
   });
@@ -203,10 +229,35 @@ export function createApp({ db, geocoder = createGeocoder(config.geocoder), pays
     }
     if (online !== undefined) {
       const profile = db.prepare('SELECT lat FROM provider_profiles WHERE user_id = ?').get(req.user.id);
+      if (online && !verification.isApproved(req.user.id)) throw forbidden('You can go online once your documents are approved');
       if (online && profile.lat == null) throw badRequest('Share your location before going online');
       db.prepare('UPDATE provider_profiles SET is_online = ? WHERE user_id = ?').run(online ? 1 : 0, req.user.id);
     }
     res.json(profileOf(req.user));
+  });
+
+  // --- Verification ---------------------------------------------------
+
+  api.get('/provider/verification', auth('provider'), (req, res) => res.json(verification.statusFor(req.user.id)));
+  api.put(
+    '/provider/documents/:kind',
+    auth('provider'),
+    // The file is the request body; its type is checked from its bytes, not the header.
+    express.raw({ type: () => true, limit: MAX_DOCUMENT_BYTES }),
+    async (req, res) => res.json(await verification.upload(req.user.id, req.params.kind, req.body)),
+  );
+  api.post('/provider/verification/submit', auth('provider'), (req, res) => res.json(verification.submit(req.user.id)));
+
+  api.get('/documents/:id', auth(), (req, res) => {
+    const file = verification.documentFile(req.user, Number(req.params.id));
+    res.set({
+      'content-type': file.mime,
+      'content-disposition': 'inline',
+      'cache-control': 'private, no-store',
+      'x-content-type-options': 'nosniff',
+      'content-security-policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'",
+    });
+    res.sendFile(file.path);
   });
 
   api.get('/provider/requests', auth('provider'), (req, res) => res.json(jobs.openRequestsFor(req.user)));
@@ -229,6 +280,49 @@ export function createApp({ db, geocoder = createGeocoder(config.geocoder), pays
     }));
   });
 
+  // --- Disputes --------------------------------------------------------
+
+  api.post('/jobs/:id/disputes', auth(), (req, res) => {
+    disputes.open(req.user, jobId(req), req.body ?? {});
+    res.status(201).json(jobs.getForUser(req.user, jobId(req)));
+  });
+
+  // --- Admin -----------------------------------------------------------
+
+  const adminApi = express.Router();
+  adminApi.use(auth('admin'));
+  api.use('/admin', adminApi);
+  const idParam = (req) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) throw badRequest('Invalid id');
+    return id;
+  };
+
+  adminApi.get('/overview', (_req, res) => res.json(admin.overview()));
+  adminApi.get('/providers', (req, res) => res.json(admin.listProviders({ status: req.query.status, q: req.query.q })));
+  adminApi.get('/providers/:id', (req, res) => res.json(admin.providerDetail(idParam(req))));
+  adminApi.post('/providers/:id/verification', (req, res) => {
+    verification.decide(req.user.id, idParam(req), req.body ?? {});
+    res.json(admin.providerDetail(idParam(req)));
+  });
+  adminApi.get('/jobs', (req, res) => res.json(admin.listJobs(req.query)));
+  adminApi.get('/jobs/:id', (req, res) => res.json(admin.jobDetail(req.user, idParam(req))));
+  adminApi.post('/jobs/:id/refunds', async (req, res) => {
+    const reason = String(req.body?.reason ?? '').trim();
+    if (!reason) throw badRequest('Give a reason for the refund');
+    await payments.refundJob(idParam(req), req.body?.amountCents, reason, req.user.id);
+    res.json(admin.jobDetail(req.user, idParam(req)));
+  });
+  adminApi.post('/jobs/:id/disputes', (req, res) => {
+    disputes.open(req.user, idParam(req), req.body ?? {});
+    res.status(201).json(admin.jobDetail(req.user, idParam(req)));
+  });
+  adminApi.get('/disputes', (req, res) => res.json(admin.listDisputes({ status: req.query.status === 'resolved' ? 'resolved' : 'open' })));
+  adminApi.post('/disputes/:id/resolve', async (req, res) => {
+    const dispute = await disputes.resolve(req.user, idParam(req), req.body ?? {});
+    res.json(admin.jobDetail(req.user, dispute.job_id));
+  });
+
   api.use((_req, _res, next) => next(new HttpError(404, 'Not found')));
 
   // Serve the built client in production so the whole app runs as one process.
@@ -240,6 +334,7 @@ export function createApp({ db, geocoder = createGeocoder(config.geocoder), pays
   app.use((err, _req, res, _next) => {
     if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
     if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON' });
+    if (err.type === 'entity.too.large') return res.status(413).json({ error: 'That file is too large' });
     console.error(err);
     res.status(500).json({ error: 'Something went wrong' });
   });
@@ -257,6 +352,7 @@ export function createApp({ db, geocoder = createGeocoder(config.geocoder), pays
   io.on('connection', (socket) => {
     const { user } = socket.data;
     socket.join(`user:${user.id}`);
+    if (user.role === 'admin') socket.join('admins');
     if (user.role !== 'provider') return;
     socket.join('providers');
     socket.on('location', (payload) => {

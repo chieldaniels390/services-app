@@ -1,17 +1,25 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { hashPassword } from '../src/auth.js';
 import { io as connect } from 'socket.io-client';
 import { createApp } from '../src/app.js';
 import { openDb } from '../src/db.js';
 import { createPaystack } from '../src/paystack.js';
 import { startFakePaystack } from './fakePaystack.js';
+import { solidPng } from '../src/png.js';
 
 const HOME = { lat: -26.2041, lng: 28.0473 }; // Johannesburg
 const SECRET = 'sk_test_fake';
 let server;
 let base;
 let fake;
+let db;
+let uploadDir;
+let adminToken;
 
 before(async () => {
   const geocoder = {
@@ -20,14 +28,19 @@ before(async () => {
   };
   fake = await startFakePaystack({ secretKey: SECRET });
   const paystack = createPaystack({ secretKey: SECRET, baseUrl: fake.url });
-  ({ server } = createApp({ db: openDb(':memory:'), geocoder, paystack }));
+  db = openDb(':memory:');
+  uploadDir = mkdtempSync(path.join(tmpdir(), 'pronow-uploads-'));
+  ({ server } = createApp({ db, geocoder, paystack, uploadDir }));
   await new Promise((resolve) => server.listen(0, resolve));
   base = `http://localhost:${server.address().port}`;
+  db.prepare("INSERT INTO users (role, name, email, password_hash) VALUES ('admin', 'Ops', 'ops@test.com', ?)").run(hashPassword('admin-password-1'));
+  adminToken = (await call('POST', '/auth/login', { body: { email: 'ops@test.com', password: 'admin-password-1' } })).body.token;
 });
 
 after(async () => {
   await new Promise((resolve) => server.close(resolve));
   await fake.close();
+  rmSync(uploadDir, { recursive: true, force: true });
 });
 
 async function call(method, path, { token, body } = {}) {
@@ -48,8 +61,12 @@ async function register(role, extra = {}) {
   return body;
 }
 
+// Most tests aren't about verification, so approve pros directly. The verification tests use the real flow.
+const approveDirectly = (pro) => db.prepare("UPDATE provider_profiles SET verification_status = 'approved' WHERE user_id = ?").run(pro.user.id);
+
 async function onlinePro(categories = ['plumbing'], at = { lat: HOME.lat + 0.01, lng: HOME.lng }) {
   const pro = await register('provider', { categories });
+  approveDirectly(pro);
   const { status } = await call('PATCH', '/provider/status', { token: pro.token, body: { online: true, ...at } });
   assert.equal(status, 200);
   return pro;
@@ -372,6 +389,217 @@ describe('payments', () => {
     const created = await call('POST', '/jobs', { token: customer.token, body: jobBody() });
     assert.equal((await call('POST', `/jobs/${created.body.job.id}/payment`, { token: other.token })).status, 403);
     assert.equal((await call('POST', `/jobs/${created.body.job.id}/payment/confirm`, { token: other.token, body: { reference: created.body.payment.reference } })).status, 403);
+  });
+});
+
+async function upload(token, kind, bytes, type = 'image/png') {
+  const res = await fetch(`${base}/api/provider/documents/${kind}`, {
+    method: 'PUT', headers: { authorization: `Bearer ${token}`, 'content-type': type }, body: bytes,
+  });
+  return { status: res.status, body: await res.json() };
+}
+const admin = (method, path, body) => call(method, `/admin${path}`, { token: adminToken, body });
+
+/** Runs a paid job up to (but not including) completion with an approved pro. */
+async function jobInProgress() {
+  const customer = await register('customer');
+  const pro = await onlinePro();
+  const { id, reference } = await book(customer);
+  await call('POST', `/jobs/${id}/accept`, { token: pro.token });
+  for (const status of ['en_route', 'arrived', 'in_progress']) await call('POST', `/jobs/${id}/status`, { token: pro.token, body: { status } });
+  return { customer, pro, id, reference };
+}
+
+describe('pro verification', () => {
+  test('unverified pros cannot go online, see requests or accept jobs', async () => {
+    const pro = await register('provider', { categories: ['plumbing'] });
+    assert.equal(pro.user.provider.verificationStatus, 'unsubmitted');
+    const online = await call('PATCH', '/provider/status', { token: pro.token, body: { online: true, ...HOME } });
+    assert.equal(online.status, 403);
+
+    db.prepare('UPDATE provider_profiles SET is_online = 1, lat = ?, lng = ? WHERE user_id = ?').run(HOME.lat, HOME.lng, pro.user.id);
+    const customer = await register('customer');
+    const { id } = await book(customer);
+    assert.deepEqual((await call('GET', '/provider/requests', { token: pro.token })).body, []);
+    assert.equal((await call('POST', `/jobs/${id}/accept`, { token: pro.token })).status, 403);
+    assert.equal((await call('GET', `/jobs/${id}`, { token: pro.token })).status, 403);
+  });
+
+  test('upload, submit, reject with a reason, fix and get approved', async () => {
+    const pro = await register('provider', { categories: ['electrical'] });
+    const png = solidPng();
+
+    // Only real images/PDFs are accepted, judged by content rather than the declared type.
+    assert.equal((await upload(pro.token, 'id', Buffer.from('not really an image at all'), 'image/png')).status, 400);
+    assert.equal((await upload(pro.token, 'selfie', Buffer.from('%PDF-1.4 fake pdf body'), 'application/pdf')).status, 400, 'selfie must be a photo');
+    assert.equal((await upload(pro.token, 'passport', png)).status, 400);
+    assert.equal((await upload(pro.token, 'id', Buffer.alloc(9 * 1024 * 1024, 1))).status, 413);
+
+    assert.equal((await upload(pro.token, 'id', png)).status, 200);
+    const early = await call('POST', '/provider/verification/submit', { token: pro.token });
+    assert.equal(early.status, 400);
+    assert.match(early.body.error, /certificate/);
+
+    await upload(pro.token, 'certificate', Buffer.from('%PDF-1.4 a trade certificate'), 'application/pdf');
+    const status = await upload(pro.token, 'selfie', png);
+    assert.deepEqual(status.body.missing, []);
+    assert.equal((await call('POST', '/provider/verification/submit', { token: pro.token })).body.status, 'pending');
+    assert.equal((await upload(pro.token, 'selfie', png)).status, 409, 'documents are locked while under review');
+
+    // Who can see the documents.
+    const docId = status.body.documents.find((d) => d.kind === 'id').id;
+    const own = await fetch(`${base}/api/documents/${docId}`, { headers: { authorization: `Bearer ${pro.token}` } });
+    assert.equal(own.status, 200);
+    assert.equal(own.headers.get('content-type'), 'image/png');
+    assert.equal(own.headers.get('x-content-type-options'), 'nosniff');
+    const stranger = await register('provider', { categories: ['cleaning'] });
+    assert.equal((await fetch(`${base}/api/documents/${docId}`, { headers: { authorization: `Bearer ${stranger.token}` } })).status, 403);
+    assert.equal((await fetch(`${base}/api/documents/${docId}`, { headers: { authorization: `Bearer ${adminToken}` } })).status, 200);
+
+    // Only admins can decide.
+    assert.equal((await call('POST', `/admin/providers/${pro.user.id}/verification`, { token: stranger.token, body: { decision: 'approve' } })).status, 403);
+    const queue = await admin('GET', '/providers?status=pending');
+    assert.ok(queue.body.some((p) => p.id === pro.user.id));
+    assert.equal((await admin('POST', `/providers/${pro.user.id}/verification`, { decision: 'reject' })).status, 400, 'a reason is required');
+    const rejected = await admin('POST', `/providers/${pro.user.id}/verification`, { decision: 'reject', note: 'ID photo is blurry' });
+    assert.equal(rejected.body.verification.status, 'rejected');
+    assert.equal((await call('GET', '/provider/verification', { token: pro.token })).body.note, 'ID photo is blurry');
+
+    // Re-upload replaces the old file on disk instead of keeping both.
+    const filesBefore = readdirSync(path.join(uploadDir, 'documents')).length;
+    await upload(pro.token, 'id', solidPng(80, 60, [10, 20, 30]));
+    assert.equal(readdirSync(path.join(uploadDir, 'documents')).length, filesBefore);
+    assert.equal((await fetch(`${base}/api/documents/${docId}`, { headers: { authorization: `Bearer ${adminToken}` } })).status, 404);
+
+    await call('POST', '/provider/verification/submit', { token: pro.token });
+    const approved = await admin('POST', `/providers/${pro.user.id}/verification`, { decision: 'approve' });
+    assert.equal(approved.body.verification.status, 'approved');
+    const online = await call('PATCH', '/provider/status', { token: pro.token, body: { online: true, ...HOME } });
+    assert.equal(online.status, 200);
+
+    // Suspending an approved pro takes them offline.
+    await admin('POST', `/providers/${pro.user.id}/verification`, { decision: 'reject', note: 'Licence expired' });
+    assert.equal((await call('GET', '/me', { token: pro.token })).body.provider.online, false);
+  });
+
+  test('admin accounts cannot be created through sign-up', async () => {
+    const res = await call('POST', '/auth/register', { body: { role: 'admin', name: 'x', email: 'sneaky@x.com', password: 'password123' } });
+    assert.equal(res.status, 400);
+  });
+
+  test('admin routes are admin-only', async () => {
+    const customer = await register('customer');
+    assert.equal((await call('GET', '/admin/overview', { token: customer.token })).status, 403);
+    assert.equal((await call('GET', '/admin/overview')).status, 401);
+    const overview = await admin('GET', '/overview');
+    assert.equal(typeof overview.body.pendingVerifications, 'number');
+  });
+
+  test('repeated failed logins are throttled', async () => {
+    const { user } = await register('customer');
+    for (let i = 0; i < 10; i++) await call('POST', '/auth/login', { body: { email: user.email, password: 'wrong' } });
+    const blocked = await call('POST', '/auth/login', { body: { email: user.email, password: 'password123' } });
+    assert.equal(blocked.status, 429);
+  });
+});
+
+describe('disputes and refunds', () => {
+  test('a dispute holds the payout; resolving with a partial refund releases the rest', async () => {
+    const { customer, pro, id, reference } = await jobInProgress();
+    await call('PUT', '/provider/payout-account', { token: pro.token, body: { bankCode: '470010', accountNumber: '1234567890', accountName: 'Pro' } });
+
+    const opened = await call('POST', `/jobs/${id}/disputes`, { token: customer.token, body: { reason: 'quality', details: 'Still leaking' } });
+    assert.equal(opened.status, 201);
+    assert.equal(opened.body.dispute.status, 'open');
+    assert.equal((await call('POST', `/jobs/${id}/disputes`, { token: customer.token, body: { reason: 'other' } })).status, 409);
+
+    const done = await call('POST', `/jobs/${id}/status`, { token: pro.token, body: { status: 'completed' } });
+    assert.equal(done.body.payouts[0].status, 'on_hold');
+    assert.ok(!fake.state.transfers.some((t) => t.reason === `Job #${id}`), 'nothing is sent while disputed');
+
+    const disputes = await admin('GET', '/disputes');
+    const dispute = disputes.body.find((d) => d.jobId === id);
+    assert.equal(dispute.reasonLabel, 'Work not done properly');
+
+    assert.equal((await admin('POST', `/disputes/${dispute.id}/resolve`, { refundCents: 20000, payoutAction: 'release' })).status, 400, 'note required');
+    const resolved = await admin('POST', `/disputes/${dispute.id}/resolve`, { refundCents: 20000, payoutAction: 'release', note: 'Partial refund for return visit' });
+    assert.equal(resolved.status, 200);
+    assert.deepEqual(fake.state.refundLog.filter((r) => r.transaction === reference), [{ transaction: reference, amount: 20000 }]);
+    assert.equal(resolved.body.payouts[0].status, 'processing');
+    assert.equal(resolved.body.refunds[0].amountCents, 20000);
+    assert.equal((await admin('POST', `/disputes/${dispute.id}/resolve`, { payoutAction: 'release', note: 'again' })).status, 409);
+
+    const seen = await call('GET', `/jobs/${id}`, { token: customer.token });
+    assert.equal(seen.body.dispute.status, 'resolved');
+    assert.equal(seen.body.dispute.resolutionNote, 'Partial refund for return visit');
+    assert.equal(seen.body.refundedCents, 20000);
+  });
+
+  test('resolving with a full refund can cancel the payout', async () => {
+    const { customer, pro, id, reference } = await jobInProgress();
+    await call('POST', `/jobs/${id}/status`, { token: pro.token, body: { status: 'completed' } });
+    // The pro has no bank account, so the payout is still unsent and can be held.
+    await call('POST', `/jobs/${id}/disputes`, { token: customer.token, body: { reason: 'no_show' } });
+    const detail = await admin('GET', `/jobs/${id}`);
+    assert.equal(detail.body.payouts[0].status, 'on_hold');
+    const dispute = detail.body.disputes[0];
+    const resolved = await admin('POST', `/disputes/${dispute.id}/resolve`, {
+      refundCents: detail.body.refundableCents, payoutAction: 'cancel', note: 'Pro left before finishing',
+    });
+    assert.equal(resolved.body.payouts[0].status, 'cancelled');
+    assert.equal(resolved.body.job.paymentStatus, 'refund_pending');
+    assert.ok(fake.state.refunds.includes(reference));
+
+    // Adding a bank account later must not send a cancelled payout.
+    await call('PUT', '/provider/payout-account', { token: pro.token, body: { bankCode: '470010', accountNumber: '1234567890', accountName: 'Pro' } });
+    assert.ok(!fake.state.transfers.some((t) => t.reason === `Job #${id}`));
+  });
+
+  test('who can dispute, and when', async () => {
+    const customer = await register('customer');
+    const pro = await onlinePro();
+    const { id } = await book(customer);
+    await call('POST', `/jobs/${id}/accept`, { token: pro.token });
+    assert.equal((await call('POST', `/jobs/${id}/disputes`, { token: customer.token, body: { reason: 'quality' } })).status, 409, 'too early');
+    const outsider = await register('customer');
+    assert.equal((await call('POST', `/jobs/${id}/disputes`, { token: outsider.token, body: { reason: 'quality' } })).status, 403);
+    assert.equal((await call('POST', `/jobs/${id}/disputes`, { token: customer.token, body: { reason: 'made-up' } })).status, 400);
+    // Admins can flag any job.
+    assert.equal((await admin('POST', `/jobs/${id}/disputes`, { reason: 'conduct', details: 'Reported by phone' })).status, 201);
+  });
+
+  test('admins can refund part of a job, but never more than was paid', async () => {
+    const customer = await register('customer');
+    const { id, reference } = await book(customer);
+    const detail = await admin('GET', `/jobs/${id}`);
+    const paid = detail.body.refundableCents;
+    assert.equal((await admin('POST', `/jobs/${id}/refunds`, { amountCents: 5000 })).status, 400, 'reason required');
+    const partial = await admin('POST', `/jobs/${id}/refunds`, { amountCents: 5000, reason: 'Goodwill' });
+    assert.equal(partial.body.refundableCents, paid - 5000);
+    assert.equal(partial.body.job.paymentStatus, 'paid', 'a partial refund leaves the booking paid');
+    assert.equal((await admin('POST', `/jobs/${id}/refunds`, { amountCents: paid, reason: 'Too much' })).status, 400);
+
+    const rest = await admin('POST', `/jobs/${id}/refunds`, { amountCents: paid - 5000, reason: 'Customer cancelled by phone' });
+    assert.equal(rest.body.refundableCents, 0);
+    assert.equal(rest.body.refunds.length, 2);
+    assert.equal(rest.body.refunds[0].createdBy, 'Ops');
+
+    for (const r of fake.state.refundLog.filter((x) => x.transaction === reference)) {
+      assert.equal(await webhook({ event: 'refund.processed', data: { transaction_reference: reference } }), 200, String(r.amount));
+    }
+    const after = await admin('GET', `/jobs/${id}`);
+    assert.deepEqual(after.body.refunds.map((r) => r.status), ['processed', 'processed']);
+    assert.equal(after.body.job.paymentStatus, 'refunded');
+  });
+
+  test('admin job search and filters', async () => {
+    const { id } = await jobInProgress();
+    const byId = await admin('GET', `/jobs?q=%23${id}`);
+    assert.deepEqual(byId.body.jobs.map((j) => j.id), [id]);
+    const active = await admin('GET', '/jobs?status=active');
+    assert.ok(active.body.jobs.some((j) => j.id === id));
+    const completed = await admin('GET', '/jobs?status=completed');
+    assert.ok(!completed.body.jobs.some((j) => j.id === id));
   });
 });
 
