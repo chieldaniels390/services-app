@@ -1,0 +1,417 @@
+# ProNow – home services on demand
+
+An Uber/Bolt-style marketplace for home services in South Africa: **plumbers, electricians, cleaners, locksmiths, handymen, aircon & heating, painters, appliance repair, pest control and gardeners**. Prices are in rand (ZAR).
+
+Customers get an upfront price and pay by card through **Paystack** when they book. Nearby pros receive the request in real time, the first to accept gets the job, and the customer tracks them live on a map until the work is done and rated.
+
+| Address search & upfront quote | Live tracking + chat | Pro dashboard |
+| --- | --- | --- |
+| ![](docs/screenshots/request.png) | ![](docs/screenshots/tracking.png) | ![](docs/screenshots/pro-dashboard.png) |
+
+> Map tiles (CARTO, built on OpenStreetMap data) and address search (OpenStreetMap's Nominatim) work in a normal browser. They were blocked in the sandbox that took these screenshots, so a stand-in address service was used.
+
+## Features
+
+**Customers**
+- Choose a service, **search for an address** (the pin jumps to it), tap the map or use GPS (the address fills in), describe the problem, pick job size and ASAP or a scheduled time
+- Upfront price: call-out fee + hourly labour × estimated hours, with **demand-based surge** when requests outnumber available pros
+- See how many pros are nearby and their ETA before booking
+- Live status (requested → accepted → on the way → arrived → in progress → completed) with the pro's position moving on the map, and the pro's photo and vehicle (make, colour, registration)
+- **Share my job:** a live link for family showing the pro, their vehicle and position until the job ends
+- **Emergency button** (customers and pros): shows 10111 / 112 and alerts the ProNow safety team with the job details
+- In-app chat and click-to-call with the assigned pro
+- Pay by card with Paystack at booking. The money is held until the job is done, and cancelling before work starts refunds it in full
+- Approve and pay for any parts the pro added (charged to the saved card, or via a new checkout)
+- Report a problem (dispute) once the pro has arrived, up to 14 days after the job
+- See a **Verified** badge on their pro
+- Rate the pro (1-5 stars and an optional comment) after each job, and see a pro's **profile**: average rating, jobs completed, star breakdown and recent reviews
+- **My bookings:** job history with filters, downloadable **PDF invoices** (tax invoices with VAT when switched on), **Book again** (the same pro gets first refusal), **favourite pros**, and **repeat bookings** (weekly or monthly, e.g. garden or pool service) with skip, pause and stop
+
+**Pros**
+- Sign up with the services you offer, then **get verified**: upload an ID, a trade certificate or licence, and a selfie. Only approved pros can go online, receive requests or accept jobs
+- Go online/offline, and set **working hours** (per day, including overnight shifts), a **service area** (tap a centre on the map and choose a radius) and **trades**. Several trades are allowed; one added after verification needs admin approval
+- Requests only reach pros who are online, approved for that trade, within their working hours (at the booked time for scheduled jobs) and whose service area covers the job
+- **Earnings dashboard:** today / this week / this month (South African time) with completed jobs and platform fees, a 30-day daily chart (with a table view), recent jobs with each fee, and payout totals
+- New requests nearby **pop up instantly** with distance, ETA and your payout (exact address hidden until you accept)
+- First pro to accept wins (atomic; others see the job disappear)
+- Step through the job, add materials cost on completion, open navigation in Google Maps
+- Share live GPS, or use **Demo drive** to simulate driving to the customer
+- Release a job you can't make – it goes straight back to other pros
+- Add a South African bank account and get paid automatically when a job is marked complete (job price minus the platform fee, plus parts in full)
+- Payouts page with transfer status and a retry button for failed transfers
+- Rate customers after each job, and see a customer's average rating (from other pros) on job requests
+- Earnings for today / 7 days / all time, rating, job history
+
+**Admin panel** (`/admin`)
+- **Overview:** what needs attention (pros to verify, open disputes, failed or held payouts) and key numbers
+- **Pros:** a verification queue with each pro's ID, certificate and selfie side by side. Approve, reject with a reason the pro sees, or suspend an approved pro
+- **Jobs:** search by job number, name, email or address and filter by status. Each job page shows the people, the full money trail (payments, refunds, payouts), disputes and the chat log
+- **Disputes:** resolve with an optional refund, then release the pro's held payout or cancel it. Both sides see the outcome note
+- **Refunds:** issue partial or full refunds on any paid job, with a reason. They go through Paystack and are recorded with who issued them
+
+**Platform**
+- Platform fee (default 15%, set with `PLATFORM_FEE_RATE`) on the upfront price; parts go 100% to the pro. Each job keeps the fee rate it was booked at
+- Busy pros (with an active job) are not offered new work
+- Role-based access: pros only see open requests in their categories, nobody else can read a job
+
+## Prices
+
+Typical 2025/26 South African rates, set in `server/src/categories.js` (amounts in cents):
+
+| Service | Call-out | Per hour | Quick fix (1h) |
+| --- | ---: | ---: | ---: |
+| Plumbing | R450 | R550 | R1 000 |
+| Electrical | R500 | R600 | R1 100 |
+| Cleaning | R100 | R150 | R250 |
+| Locksmith | R550 | R500 | R1 050 |
+| Handyman | R300 | R350 | R650 |
+| Aircon & Heating | R650 | R700 | R1 350 |
+| Painting | R300 | R350 | R650 |
+| Appliance Repair | R450 | R500 | R950 |
+| Pest Control | R500 | R550 | R1 050 |
+| Gardening | R150 | R180 | R330 |
+
+Standard jobs are quoted at 2 hours and big jobs at 4. Rates differ between cities and suburbs, so check them against local competitors before launch.
+
+## Who gets offered a job
+
+A pro is offered a request when **all** of these are true:
+
+1. They're **online** and **verified**, and not busy with another job.
+2. The job's trade is one of their **approved trades**. When a verified pro adds a trade, it stays *pending* until an admin approves it on the pro's admin page, since their certificate may not cover it. A new pro's trades are approved together with their verification.
+3. The job is inside their **service area**: within their chosen radius (1-100 km) of the centre they picked. If they haven't set one, it's `DISPATCH_RADIUS_KM` around their live location.
+4. The job time is inside their **working hours**: now for ASAP jobs, the booked time for scheduled ones. Hours are per weekday in `TIMEZONE`, and a shift can run past midnight (e.g. 22:00-06:00). With no hours set, a pro works any time.
+
+The same rules decide the customer's "N pros nearby" count, and the pro's request list, which updates as their shift starts and ends. If a pro is online but off shift, their dashboard says so.
+
+| Work settings | Earnings |
+| --- | --- |
+| ![](docs/screenshots/work-settings.png) | ![](docs/screenshots/earnings.png) |
+
+Earnings are what the pro actually receives: their payouts, excluding any an admin cancelled in a dispute. Parts count once the customer has paid for them. "This week" starts on Monday.
+
+## Bookings, invoices and repeat visits
+
+| My bookings | Repeat booking | Tax invoice (PDF) |
+| --- | --- | --- |
+| ![](docs/screenshots/bookings.png) | ![](docs/screenshots/repeat-booking.png) | ![](docs/screenshots/invoice.png) |
+
+**Invoices.** Customers download a PDF invoice for any completed, paid job, from My bookings or the job page. Admins can download it from the admin job page.
+- The first download issues it: it gets a sequential number (`INV-2026-00042`) and its contents are frozen. Later changes (VAT switched on, business details edited, a later refund) never alter an invoice that was already issued.
+- Refunds made before the invoice was issued appear on it.
+- Admin → Settings holds the business name, address, registration number and footer, and the **VAT switch**:
+  - With VAT on, invoices are titled *Tax invoice* and show your VAT number and "Includes VAT at 15%".
+  - Customer prices already include VAT (as South African consumer prices must), so turning VAT on doesn't change what anyone pays.
+  - VAT can't be turned on without a valid VAT number.
+
+**Book again and favourites.** Customers can rebook or save (♡) any pro who has completed a job for them. Booking again (from a past job or the favourites list) prefills the job.
+- The chosen pro is offered it alone first and sees "⭐ Asked for you". They have 5 minutes for an ASAP job and an hour for a scheduled one (`PREFERRED_PRO_WINDOW_MINUTES`, `PREFERRED_PRO_WINDOW_SCHEDULED_MINUTES`).
+- After that, or straight away if the pro is offline, off shift or out of range, the job goes to everyone as normal, and the customer is told.
+
+**Repeat bookings.** On the booking form, choose *Repeat*, then *Every week* or *Every month*, and the first visit.
+- The first visit is paid through checkout, which saves the card.
+- Each later visit is created `RECURRING_LEAD_HOURS` (48) ahead as a normal scheduled job. It's charged to the saved card at the standard rate (never busy-time pricing) and goes to the same pro first if one was chosen.
+- If the card is declined, the visit waits with a "payment needed" notification.
+- Monthly visits keep the day of the month, so the 31st becomes the 30th in November.
+- Customers can skip the next visit, pause, resume (missed visits are skipped, never booked in the past) or stop.
+- A scheduler in the server process books due visits and hands "book again" jobs to everyone when their window ends. It checks every minute and is safe to run more than once.
+
+All dates and times are shown and entered in `TIMEZONE`, so a visit booked for 09:00 is 09:00 in South Africa, whatever the device's clock says.
+
+## Ratings and reviews
+
+| Pro profile | Admin: low ratings |
+| --- | --- |
+| ![](docs/screenshots/pro-profile.png) | ![](docs/screenshots/admin-low-ratings.png) |
+
+Ratings go both ways. After a completed job, the customer rates the pro and the pro rates the customer: 1-5 stars plus an optional comment, once each, within `REVIEW_WINDOW_DAYS` (14).
+
+- **Reviews of pros are public** on the pro's profile (`/pros/:id`). The profile shows the average rating, number of reviews, jobs completed, a star breakdown and the latest reviews. Reviewers appear as first name and initial ("Naledi C."). Pros get a notification for each new review.
+- **Reviews of customers are private.** Pros only see a customer's average and count, on job requests and the job page, to help them decide. The comments are visible to admins only, and customers don't see what a pro wrote about them.
+- **Admin → Low ratings** lists everyone, pros and customers, averaging below `LOW_RATING_THRESHOLD` (3.5). It shows each person's latest reviews with links to the jobs. Someone needs at least `LOW_RATING_MIN_REVIEWS` (3) reviews before they can be flagged, so one bad review on a first job doesn't flag anyone. The count shows on the overview and the tab, and flags also appear on admin pro and job pages. A pro can be suspended from their admin page.
+- Ratings from before two-way reviews existed are carried over automatically.
+
+## Safety
+
+| Family's view of a shared job | Emergency button | Admin: safety alerts |
+| --- | --- | --- |
+| ![](docs/screenshots/share-track.png) | ![](docs/screenshots/emergency.png) | ![](docs/screenshots/admin-safety.png) |
+
+**Share my job.** From the job page the customer taps *Share my job*. On phones this opens the share sheet (WhatsApp, SMS…); elsewhere the link is copied. Anyone with the link can open `/track/<token>` without signing in. The page shows the pro's name, photo, rating and vehicle (colour, make, model, registration), the job status and ETA, a live map of the pro's position (refreshed every 5 seconds) and the emergency numbers.
+- **What it never shows:** the street address, phone numbers or emails.
+- **When it stops:** as soon as the job is completed or cancelled, the link shows only "This job has ended". *Stop sharing* disables every link straight away.
+- **Storage:** links are long random tokens, and only a hash of each is stored.
+
+**Pro photo and vehicle.** Pros add these under *Work settings*. The photo is a profile picture, separate from the ID-verification selfie, which is never shown to customers or on share links. Customers see the photo and vehicle on the job page once a pro accepts.
+
+**Emergency button.** Shown to the customer and the assigned pro while a job is under way, and for an hour after it's completed (`EMERGENCY_AFTER_JOB_MINUTES`). One tap:
+1. **Alerts the safety team immediately,** with no confirmation step, because speed matters. Admins get an in-app notification, a push and a red banner across the admin panel, plus an SMS to `SAFETY_ALERT_PHONE` if set.
+2. **Shows tap-to-call buttons** for **10111** (SAPS) and **112** (any mobile).
+3. **Adds the person's location** if their phone shares it, and lets them add a note. They can also cancel ("I'm safe") if it was pressed by accident.
+
+Pressing again updates the open alert rather than creating another. **Admin → Safety** lists alerts with both people's phone numbers, the job, the reporter's location (open in maps) and notes. You can mark an alert *being handled*, *resolved* or *false alarm*, and each job's page shows its alerts.
+
+## Notifications
+
+| In-app bell | Settings | Texts sent, as the admin sees them |
+| --- | --- | --- |
+| ![](docs/screenshots/notifications.png) | ![](docs/screenshots/notification-settings.png) | ![](docs/screenshots/admin-sms.png) |
+
+Every event goes through one place (`server/src/notifications.js`), which decides the wording and the channels:
+
+| Event | Who | In-app | Push | SMS |
+| --- | --- | :-: | :-: | :-: |
+| Pro accepted the job | Customer | ✓ | ✓ | ✓ |
+| Pro is on the way (with ETA) | Customer | ✓ | ✓ | ✓ |
+| Pro has arrived | Customer | ✓ | ✓ | |
+| Job complete (total, or parts to approve) | Customer | ✓ | ✓ | ✓ |
+| Pro had to drop the job | Customer | ✓ | ✓ | |
+| Refund issued | Customer | ✓ | ✓ | |
+| New job request nearby | Pro | | ✓ | |
+| Customer cancelled | Pro | ✓ | ✓ | |
+| Payout paid to bank | Pro | ✓ | ✓ | |
+| Verification approved / needs attention | Pro | ✓ | ✓ | |
+| New chat message | Other party | | ✓ | |
+| Dispute opened / resolved | Both | ✓ | ✓ | |
+
+- **In-app:** a 🔔 bell with an unread count, plus a toast when something arrives while you're on a different page. Notifications are stored, so nothing is lost if you were offline.
+- **Push:** standard Web Push through a service worker (`client/public/sw.js`). It works in Chrome, Edge, Firefox and Safari. On iPhone it needs iOS 16.4+ and the app added to the home screen; the Settings page explains this.
+  - The worker doesn't show a push while the app is open in front, because the in-app toast covers it.
+  - Tapping a notification opens the job.
+  - Signing out unlinks the browser, so the next person on that device doesn't get the previous user's alerts.
+  - Pushes are only sent to the browser vendors' push services, so a user can't make the server send requests to an internal address.
+- **SMS:** only for the three key customer moments. Messages are plain ASCII (so each fits in one SMS) and include a link to the job.
+  - Numbers are normalised to international format, so `082 555 1234` becomes `+27825551234`.
+  - Customers can turn texts off in Settings.
+  - Every SMS attempt is logged and shown on the admin job page, with its status and any error.
+- Delivery happens in the background. A slow or failing SMS provider never slows down or breaks the job update itself.
+
+### Choosing an SMS provider
+
+Set `SMS_PROVIDER`:
+
+| Value | What it does | Needs |
+| --- | --- | --- |
+| `console` (default) | Prints texts to the server log, for development | – |
+| `none` | SMS off | – |
+| `twilio` | [Twilio](https://www.twilio.com/docs/messaging) | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM` or `TWILIO_MESSAGING_SERVICE_SID` |
+| `bulksms` | [BulkSMS](https://www.bulksms.com/developer/json/v1/) (South African) | `BULKSMS_TOKEN_ID`, `BULKSMS_TOKEN_SECRET`, optional `SMS_SENDER_ID` |
+
+Switching providers is just a config change. To add another one (Clickatell, Africa's Talking, Infobip...), write a ~25-line adapter with a single `send({ to, body })` method and register it in one line. See [`server/src/sms/README.md`](server/src/sms/README.md). The server refuses to start if the provider name is wrong or its credentials are missing, so a typo can't silently stop SMS.
+
+The Twilio and BulkSMS adapters are tested against the request format in each provider's API docs. Send yourself a test text before relying on them.
+
+### Push keys
+
+Web Push needs a VAPID key pair. If `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` aren't set, the server generates a pair on first start and stores it in the database.
+- That's fine for a single server.
+- If you run several servers, or might move the database, generate the keys once with `npx web-push generate-vapid-keys` and set them in the environment.
+- Changing the keys invalidates every existing subscription; users simply turn notifications on again.
+- Set `VAPID_SUBJECT` to a `mailto:` address that push services can contact you on.
+
+## Verification, disputes and admin
+
+| Pro uploads documents | Admin reviews a pro | Admin resolves a dispute |
+| --- | --- | --- |
+| ![](docs/screenshots/pro-verification.png) | ![](docs/screenshots/admin-verify.png) | ![](docs/screenshots/admin-job.png) |
+
+**Creating your admin account.** There's no sign-up for admins. On the server, run:
+
+```bash
+npm run create-admin -- you@example.com "Your Name"
+```
+
+It prints a generated password once, or set `ADMIN_PASSWORD` to choose one (12+ characters). Then sign in normally and you land on `/admin`. The demo seed also creates `admin@demo.com`, for local use only. The seed script refuses to run when `NODE_ENV=production`.
+
+**Verification.** A pro moves from *not submitted* → *pending* → *approved* or *rejected*.
+- Uploads are checked by their actual contents, not their file name: JPG, PNG, WebP or PDF, and photos only for the selfie. Each file is capped at 8 MB.
+- Files are stored under `UPLOAD_DIR` with random names, outside the public web folder. They're served only to the pro who uploaded them and to admins.
+- A replaced document deletes the old file.
+- Documents are locked while under review and once approved.
+- Rejecting an approved pro suspends them: they go offline straight away and stop receiving jobs.
+
+**Disputes.**
+- The customer or the assigned pro can raise one once the pro has arrived, up to 14 days after completion. Admins can open one on any job.
+- While a dispute is open, any payout not yet sent is held. A payout that was already transferred can't be pulled back. A refund in that case comes out of the platform's balance.
+- Resolving a dispute applies the refund first. If Paystack refuses, the dispute stays open and nothing else changes. Then the held payouts are released or cancelled.
+
+**Refunds.** Every refund goes through one code path, whether it's a customer cancellation, an automatic duplicate-payment refund, an admin refund or a dispute refund. The amount is reserved before calling Paystack, so two admins clicking at once can't refund more than was paid.
+
+**Sign-in protection.** After 10 failed attempts for the same email from the same IP address, sign-in is blocked for 15 minutes.
+
+### Before you go live with real IDs
+
+ID documents and selfies are personal information under **POPIA**.
+- Put `UPLOAD_DIR` on encrypted storage that's backed up and not publicly reachable. For more than one server, move it to private object storage such as S3, with short-lived signed links.
+- Decide how long you keep documents after approval or account closure, and say so in your privacy policy.
+- Give admin accounts strong, unique passwords and keep the list of admins short.
+- Consider an ID-verification provider for automatic ID and face matching. The review queue stays the same; the provider's result becomes another input for the reviewer.
+
+## Payments (Paystack)
+
+```
+Customer books ──► Paystack checkout ──► money held in your Paystack balance
+                                              │
+        job goes out to pros once paid ◄──────┘
+                                              │
+Pro marks job complete ──► Paystack transfer to pro's bank: price − platform fee
+Customer approves parts ──► saved card charged ──► transfer to pro: parts in full
+Customer cancels before work starts ──► full refund
+```
+
+- Payment is confirmed with Paystack's API both when the customer returns from checkout and when the `charge.success` webhook arrives. Whichever comes first applies it, and repeats do nothing.
+- If a customer manages to pay twice, or pays for a booking they already cancelled, the extra payment is refunded automatically.
+- If a pro hasn't added bank details yet, or a transfer fails, the payout is kept. It's sent when they add their account or press **Retry failed** on the Payouts page.
+
+| Customer approves parts | Pro payouts |
+| --- | --- |
+| ![](docs/screenshots/approve-parts.png) | ![](docs/screenshots/payouts.png) |
+
+### Setting up Paystack (test mode)
+
+1. Create a Paystack account for South Africa and copy your **test secret key** (`sk_test_…`) from *Settings → API Keys & Webhooks*.
+2. Run the server with it:
+   ```bash
+   PAYSTACK_SECRET_KEY=sk_test_xxx APP_URL=http://localhost:5173 npm run dev
+   ```
+   The header shows a **Test** badge while a test key is in use.
+3. Pay with one of [Paystack's test cards](https://paystack.com/docs/payments/test-payments/). No real money moves.
+4. **Webhooks:** set the webhook URL to `https://<your-domain>/api/paystack/webhook`. Locally you can skip this, because payments are also confirmed when the customer returns from checkout. Transfer and refund updates do need the webhook, so use a tunnel such as `cloudflared` or `ngrok` to test those.
+5. **Payouts:** pros add their bank account on the Payouts page (it creates a Paystack transfer recipient). In the Paystack dashboard:
+   - make sure Transfers are enabled for your account;
+   - turn off OTP for transfers, otherwise API transfers will fail with a message saying so;
+   - transfers are paid from your Paystack balance, so check your settlement settings with Paystack so that collected payments stay available for payouts.
+
+Before going live:
+- Switch to your live key (`sk_live_…`).
+- Paystack's own fees for card payments and transfers come out of the platform's share, so set `PLATFORM_FEE_RATE` to cover them. See [Paystack pricing](https://paystack.com/za/pricing).
+
+## Tech stack
+
+- **Server:** Node.js 22+, Express 5, Socket.IO, SQLite via Node's built-in `node:sqlite` (no native deps)
+- **Client:** React 19, Vite, React Router, Leaflet with CARTO Dark Matter tiles on OpenStreetMap data (no API keys)
+- **Tests:** `node:test` API + realtime tests
+
+```
+server/src
+  app.js         HTTP routes + Socket.IO wiring
+  jobs.js        job lifecycle, dispatch, chat, earnings
+  pricing.js     quotes, surge, fee split
+  paystack.js    Paystack API client + webhook signature check
+  payments.js    booking payments, refunds, parts, payouts
+  verification.js  pro documents + approval
+  disputes.js    raising and resolving disputes
+  admin.js       admin panel queries
+  notifications.js  every notification's wording + delivery (in-app, push, SMS)
+  push.js        Web Push subscriptions and sending
+  providers.js   pro work settings: trades, working hours, service area
+  earnings.js    pro earnings dashboard
+  time.js        time zones, working-hours checks, period starts
+  invoices.js    invoice issuing (frozen snapshots) and PDF rendering
+  bookings.js    favourite pros and repeat bookings (+ the scheduler that books visits)
+  platform.js    admin-editable business details and VAT settings
+  reviews.js     two-way ratings, pro profiles, low-rating flags
+  safety.js      share-my-job links and emergency alerts
+  sms/           SMS provider adapters (console, twilio, bulksms) - add your own here
+  create-admin.js  CLI to create an admin account
+  geocoder.js    address search / reverse lookup (Nominatim), throttled + cached
+  db.js          schema
+  seed.js        demo accounts
+client/src
+  pages/         Landing, Auth, CustomerHome, ProviderHome, JobPage, History, Payouts, Verification
+  pages/admin/   Overview, Pros, Pro, Jobs, Job, Disputes (loaded only for admins)
+  components/    MapView, AddressSearch, Chat, StatusTimeline, Stars, Bell, PushPrompt, ...
+  public/sw.js   service worker for push notifications
+```
+
+## Getting started
+
+Requires **Node.js 22.13+**.
+
+```bash
+npm install
+npm run seed      # demo accounts (password: password123)
+npm run dev       # API on :4000, app on http://localhost:5173
+```
+
+Demo accounts:
+
+| Email | Role |
+| --- | --- |
+| admin@demo.com | Admin panel |
+| customer@demo.com | Customer |
+| difficult@demo.com | Customer with low ratings from pros (appears under Admin → Low ratings) |
+| plumber@demo.com | Plumbing, Aircon & Heating. Has five weeks of earnings history for the dashboard |
+| electrician@demo.com | Electrical, Appliances |
+| cleaner@demo.com | Cleaning |
+| locksmith@demo.com | Locksmith, Handyman |
+| handyman@demo.com | Handyman, Painting, Gardening |
+| newpro@demo.com | Plumbing, Handyman, **waiting for verification** (try approving them as admin) |
+
+**Try the full flow** (needs a Paystack test key, see below): open the app in two browser windows (one normal, one private). Sign in as `customer@demo.com` in one and `plumber@demo.com` in the other. As the pro, add a bank account on the Payouts page. As the customer, request a plumber and pay with a test card. Then accept the job as the pro, then tap *Start driving* → *Demo drive* to watch the van move on the customer's map.
+
+### Production
+
+```bash
+npm run build     # builds the client into client/dist
+npm start         # serves API + app on PORT (default 4000)
+```
+
+### Configuration
+
+| Variable | Default | |
+| --- | --- | --- |
+| `PORT` | `4000` | |
+| `DB_FILE` | `services.db` | SQLite file |
+| `TIMEZONE` | `Africa/Johannesburg` | Working hours and today / week / month earnings use this |
+| `DISPATCH_RADIUS_KM` | `30` | Service radius for pros who haven't set their own area |
+| `RECURRING_LEAD_HOURS` | `48` | How far ahead repeat visits are booked and charged |
+| `PREFERRED_PRO_WINDOW_MINUTES` / `..._SCHEDULED_MINUTES` | `5` / `60` | How long a "book again" pro has the job to themselves |
+| `SAFETY_ALERT_PHONE` | – | On-call number that gets an SMS for every emergency alert |
+| `EMERGENCY_AFTER_JOB_MINUTES` | `60` | How long after a job the emergency button stays available |
+| `REVIEW_WINDOW_DAYS` | `14` | How long after a job both sides can rate |
+| `LOW_RATING_THRESHOLD` / `LOW_RATING_MIN_REVIEWS` | `3.5` / `3` | Flag users averaging below this once they have this many reviews |
+| `MAX_SERVICE_RADIUS_KM` | `100` | Largest radius a pro can choose |
+| `UPLOAD_DIR` | `uploads` | Where verification documents are stored. Keep private and backed up |
+| `TOKEN_SECRET` | dev value | **Set this in production** |
+| `CURRENCY` | `ZAR` | ISO code used for display |
+| `LOCALE` | `en-ZA` | Number formatting locale |
+| `PLATFORM_FEE_RATE` | `0.15` | Platform's share of the upfront price (0.15 = 15%). Applies to new bookings |
+| `PAYSTACK_SECRET_KEY` | – | `sk_test_…` for test mode. Booking is disabled until set |
+| `APP_URL` | `http://localhost:5173` | Public URL customers return to after checkout |
+| `SMS_PROVIDER` | `console` | `console`, `none`, `twilio` or `bulksms` (see Notifications) |
+| `SMS_DEFAULT_COUNTRY_CODE` | `27` | Used to turn local numbers like `082…` into `+27…` |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | generated | Web Push keys. Set them if you run more than one server |
+| `VAPID_SUBJECT` | `mailto:support@example.com` | Contact address for push services |
+| `PAYSTACK_BASE_URL` | `https://api.paystack.co` | Only changed for tests |
+| `DEFAULT_LAT` / `DEFAULT_LNG` | Johannesburg | Default map centre |
+| `MAP_TILE_URL` | CARTO Dark Matter | Any XYZ tile URL. For CARTO's light style use `https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png` with `MAP_TILES_DARK=false` |
+| `MAP_TILE_ATTRIBUTION` | OpenStreetMap + CARTO credit | Must match the tile provider's terms |
+| `MAP_TILE_SUBDOMAINS` / `MAP_TILE_MAX_ZOOM` / `MAP_TILES_DARK` | `abcd` / `20` / `true` | |
+| `GEOCODER_URL` | `https://nominatim.openstreetmap.org` | Any Nominatim-compatible API |
+| `GEOCODER_USER_AGENT` | `ProNow/1.0 …` | **Set to your app name + contact email** (Nominatim policy) |
+| `GEOCODER_COUNTRIES` | `za` | Limit address search to these countries (comma-separated, empty for all) |
+
+Address lookups go through the server, which caches results and keeps to Nominatim's free-tier limit of one request per second. That's enough for testing and a small launch. For real traffic, self-host Nominatim or use a paid provider with a compatible API, and point `GEOCODER_URL` at it.
+
+Service categories and prices live in `server/src/categories.js`.
+
+### Tests
+
+```bash
+npm test
+```
+
+## Roadmap
+
+- Hiding abusive reviews, and suspending customers, from the admin panel
+- Credit notes for refunds made after an invoice is issued
+- Cancellation fees once a pro is on the way; automatically expire unpaid bookings
+- Automatic ID and face matching through a verification provider
+- Delivery receipts from the SMS provider, and a notification history clean-up job
+- Admin actions for failed payouts (retry or mark as paid by hand), and an audit log of admin actions
+- Pro verification (ID, licences, insurance) and an admin console
+- Photo uploads on requests, push notifications / SMS
+- Routing-based ETAs (road distance instead of straight line)
+- Native apps (React Native) reusing the same API
+- Postgres + PostGIS for geo queries at scale
