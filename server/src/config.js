@@ -1,3 +1,8 @@
+function codespaceUrl() {
+  const { CODESPACE_NAME: name, GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN: domain } = process.env;
+  return name && domain ? `https://${name}-${process.env.PORT ?? 4000}.${domain}` : null;
+}
+
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   dbFile: process.env.DB_FILE ?? 'services.db',
@@ -11,7 +16,8 @@ export const config = {
   // Each job stores the rate in force when it was booked, so changing this never alters existing jobs.
   platformFeeRate: Number(process.env.PLATFORM_FEE_RATE ?? 0.15),
   // Public URL of the app; Paystack sends customers back here after checkout.
-  appUrl: (process.env.APP_URL ?? 'http://localhost:5173').replace(/\/$/, ''),
+  // In GitHub Codespaces this defaults to the forwarded address of PORT (the built app).
+  appUrl: (process.env.APP_URL ?? codespaceUrl() ?? 'http://localhost:5173').replace(/\/$/, ''),
   paystack: {
     secretKey: process.env.PAYSTACK_SECRET_KEY ?? '',
     baseUrl: process.env.PAYSTACK_BASE_URL ?? 'https://api.paystack.co',

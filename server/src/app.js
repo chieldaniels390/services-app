@@ -1,7 +1,6 @@
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Server } from 'socket.io';
 import { createToken, hashPassword, readToken, verifyPassword } from './auth.js';
@@ -12,6 +11,7 @@ import { createGeocoder } from './geocoder.js';
 import { isValidPoint } from './geo.js';
 import { createJobService, ratingOf } from './jobs.js';
 import { createAdminService } from './admin.js';
+import { CLIENT_DIST } from './clientBuild.js';
 import { DISPUTE_REASONS } from './disputes.js';
 import { createNotifier } from './notifications.js';
 import { createPaystack } from './paystack.js';
@@ -27,7 +27,6 @@ import { createSmsProvider } from './sms/index.js';
 import { DOCUMENT_KINDS, MAX_DOCUMENT_BYTES, createVerificationService } from './verification.js';
 import { JOB_SIZES } from './pricing.js';
 
-const CLIENT_DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../client/dist');
 
 export function createApp({
   db,
@@ -482,9 +481,20 @@ export function createApp({
   api.use((_req, _res, next) => next(new HttpError(404, 'Not found')));
 
   // Serve the built client in production so the whole app runs as one process.
+  // index.html is never cached, so a rebuild reaches browsers on the next load; the files it points to
+  // have content hashes in their names, so those can be cached for good.
   if (existsSync(CLIENT_DIST)) {
-    app.use(express.static(CLIENT_DIST));
-    app.get('/{*splat}', (_req, res) => res.sendFile(path.join(CLIENT_DIST, 'index.html')));
+    app.use(express.static(CLIENT_DIST, {
+      index: false,
+      setHeaders(res, file) {
+        const hashed = file.startsWith(path.join(CLIENT_DIST, 'assets') + path.sep);
+        res.setHeader('Cache-Control', hashed ? 'public, max-age=31536000, immutable' : 'no-cache');
+      },
+    }));
+    app.get('/{*splat}', (_req, res) => {
+      res.setHeader('Cache-Control', 'no-cache');
+      res.sendFile(path.join(CLIENT_DIST, 'index.html'));
+    });
   }
 
   app.use((err, _req, res, _next) => {
