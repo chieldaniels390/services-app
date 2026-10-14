@@ -372,7 +372,8 @@ export function createJobService({
 
   function listForUser(user) {
     const column = user.role === 'provider' ? 'provider_id' : 'customer_id';
-    return db.prepare(`${JOB_SELECT} WHERE j.${column} = ? ORDER BY j.id DESC LIMIT 100`)
+    // Most recent first: by when the job finished, or when it was booked if it hasn't yet.
+    return db.prepare(`${JOB_SELECT} WHERE j.${column} = ? ORDER BY COALESCE(j.completed_at, j.cancelled_at, j.created_at) DESC, j.id DESC LIMIT 100`)
       .all(user.id)
       .map((row) => toDto(row, user));
   }
