@@ -134,6 +134,7 @@ export function createApp({
     documentKinds: Object.fromEntries(Object.entries(DOCUMENT_KINDS).map(([k, v]) => [k, v.label])),
     disputeReasons: DISPUTE_REASONS,
     push: { publicKey: push.publicKey },
+    map: config.map,
     sms: { enabled: Boolean(smsProvider) },
   }));
 

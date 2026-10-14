@@ -33,6 +33,18 @@ export const config = {
     privateKey: process.env.VAPID_PRIVATE_KEY,
     subject: process.env.VAPID_SUBJECT ?? 'mailto:support@example.com',
   },
+  // Map tiles. Defaults to CARTO's free "Dark Matter" basemap (OpenStreetMap data), which allows use from any
+  // host. The tile servers at tile.openstreetmap.org block apps like this one (403 "Access blocked").
+  // Any XYZ tile URL works; {s} picks a subdomain, {r} becomes "@2x" on high-DPI screens.
+  map: {
+    tileUrl: process.env.MAP_TILE_URL ?? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    subdomains: process.env.MAP_TILE_SUBDOMAINS ?? 'abcd',
+    attribution: process.env.MAP_TILE_ATTRIBUTION
+      ?? '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    maxZoom: Number(process.env.MAP_TILE_MAX_ZOOM ?? 20),
+    // Styles the map background and attribution to suit dark tiles; set to false for a light basemap.
+    dark: (process.env.MAP_TILES_DARK ?? 'true') !== 'false',
+  },
   geocoder: {
     // Nominatim (OpenStreetMap). Its usage policy needs an identifying User-Agent and at most 1 request/second;
     // for heavy traffic, self-host Nominatim or point this at a commercial provider with a compatible API.

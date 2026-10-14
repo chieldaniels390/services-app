@@ -146,6 +146,10 @@ button.category:hover { transform: translateY(-2px); border-color: var(--brand);
 /* Map */
 .map { height: 320px; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); position: relative; z-index: 0; }
 .map .leaflet-container { height: 100%; width: 100%; background: var(--bg); }
+/* Dark basemap: match its background while tiles load, and keep the attribution readable on it. */
+.map.dark-tiles .leaflet-container { background: #191a1a; }
+.map.dark-tiles .leaflet-control-attribution { background: rgb(0 0 0 / 55%); color: #cbd5e1; }
+.map.dark-tiles .leaflet-control-attribution a { color: #5eead4; }
 .map-pin {
   width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; font-size: 19px;
   background: #fff; border: 3px solid var(--brand); box-shadow: 0 2px 8px rgb(0 0 0 / 30%);

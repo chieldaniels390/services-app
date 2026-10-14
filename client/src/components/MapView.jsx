@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import L from 'leaflet';
 import { MapContainer, Marker, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet';
+import { useSession } from '../session.jsx';
 
 const iconCache = new Map();
 function pinIcon(emoji, variant = '') {
@@ -55,13 +56,11 @@ function Focus({ point }) {
  */
 export default function MapView({ center, markers = [], frame = [], focus, onPick, className = '' }) {
   const framePoints = useMemo(() => frame.filter(Boolean), [frame]);
+  const { map: tiles } = useSession().config;
   return (
-    <div className={`map ${className}`}>
-      <MapContainer center={center} zoom={14} scrollWheelZoom zoomControl={false}>
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
+    <div className={`map ${tiles.dark ? 'dark-tiles' : ''} ${className}`}>
+      <MapContainer center={center} zoom={14} maxZoom={tiles.maxZoom} scrollWheelZoom zoomControl={false}>
+        <TileLayer url={tiles.tileUrl} subdomains={tiles.subdomains} attribution={tiles.attribution} maxZoom={tiles.maxZoom} />
         {markers.map((m) => (
           <Marker key={m.id} position={[m.lat, m.lng]} icon={pinIcon(m.emoji, m.variant)}>
             {m.label && <Tooltip direction="top" offset={[0, -18]}>{m.label}</Tooltip>}

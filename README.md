@@ -8,7 +8,7 @@ Customers get an upfront price and pay by card through **Paystack** when they bo
 | --- | --- | --- |
 | ![](docs/screenshots/request.png) | ![](docs/screenshots/tracking.png) | ![](docs/screenshots/pro-dashboard.png) |
 
-> Map tiles and address search use OpenStreetMap and work in a normal browser. They were blocked in the sandbox that took these screenshots, so a stand-in address service was used.
+> Map tiles (CARTO, built on OpenStreetMap data) and address search (OpenStreetMap's Nominatim) work in a normal browser. They were blocked in the sandbox that took these screenshots, so a stand-in address service was used.
 
 ## Features
 
@@ -205,7 +205,7 @@ Before going live:
 ## Tech stack
 
 - **Server:** Node.js 22+, Express 5, Socket.IO, SQLite via Node's built-in `node:sqlite` (no native deps)
-- **Client:** React 19, Vite, React Router, Leaflet + OpenStreetMap (no API keys)
+- **Client:** React 19, Vite, React Router, Leaflet with CARTO Dark Matter tiles on OpenStreetMap data (no API keys)
 - **Tests:** `node:test` API + realtime tests
 
 ```
@@ -284,6 +284,9 @@ npm start         # serves API + app on PORT (default 4000)
 | `PAYSTACK_BASE_URL` | `https://api.paystack.co` | Only changed for tests |
 | `DISPATCH_RADIUS_KM` | `30` | How far away pros get offered a job |
 | `DEFAULT_LAT` / `DEFAULT_LNG` | Johannesburg | Default map centre |
+| `MAP_TILE_URL` | CARTO Dark Matter | Any XYZ tile URL. For CARTO's light style use `https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png` with `MAP_TILES_DARK=false` |
+| `MAP_TILE_ATTRIBUTION` | OpenStreetMap + CARTO credit | Must match the tile provider's terms |
+| `MAP_TILE_SUBDOMAINS` / `MAP_TILE_MAX_ZOOM` / `MAP_TILES_DARK` | `abcd` / `20` / `true` | |
 | `GEOCODER_URL` | `https://nominatim.openstreetmap.org` | Any Nominatim-compatible API |
 | `GEOCODER_USER_AGENT` | `ProNow/1.0 …` | **Set to your app name + contact email** (Nominatim policy) |
 | `GEOCODER_COUNTRIES` | `za` | Limit address search to these countries (comma-separated, empty for all) |
